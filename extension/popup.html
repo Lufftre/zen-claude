@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg: #fff; --fg: #1f1f1f; --muted: #6b6b6b; --line: #e6e3de; --ok: #2e9d5b; --bad: #c0392b; --accent: #d97757; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1f1e1d; --fg: #eeeae4; --muted: #a09c96; --line: #3a3835; } }
+  body { margin: 0; width: 320px; font: 13px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  header img { width: 20px; height: 20px; }
+  header h1 { font-size: 14px; margin: 0; flex: 1; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 8px; }
+  .status { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+  input[type=number] { width: 70px; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 10px 14px 4px; }
+  ul { list-style: none; margin: 0; padding: 0 14px 12px; max-height: 240px; overflow: auto; }
+  li { padding: 4px 0; border-bottom: 1px dashed var(--line); font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+  li .err { color: var(--bad); } li time { color: var(--muted); margin-right: 6px; }
+  .note { color: var(--muted); font-size: 11px; }
+  .empty { color: var(--muted); font-family: inherit; }
+  .hint { color: var(--muted); font-size: 12px; padding: 0 14px 10px; }
+</style>
+</head>
+<body>
+  <header><img src="icons/icon.svg" alt=""><h1>Claude for Zen</h1></header>
+  <div class="row">
+    <span class="status"><span id="dot" class="dot"></span><span id="status">…</span></span>
+    <label><input type="checkbox" id="enabled"> Allow control</label>
+  </div>
+  <div class="row">
+    <span>Trusted input <span id="trustedNote" class="note"></span></span>
+    <input type="checkbox" id="trusted">
+  </div>
+  <div class="row">
+    <span>MCP server port</span>
+    <input type="number" id="port" min="1" max="65535">
+  </div>
+  <p id="hint" class="hint" hidden>Start a Claude Code session with the <code>zen-browser</code> MCP server configured; the extension connects automatically.</p>
+  <h2>Recent activity</h2>
+  <ul id="activity"></ul>
+  <script src="popup.js"></script>
+</body>
+</html>

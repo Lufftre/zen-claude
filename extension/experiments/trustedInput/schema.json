@@ -1,0 +1,79 @@
+[
+  {
+    "namespace": "trustedInput",
+    "description": "Browser-level (isTrusted) mouse, keyboard and wheel input, synthesized in the parent process.",
+    "functions": [
+      {
+        "name": "status",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "mouse",
+        "type": "function",
+        "async": true,
+        "description": "Dispatch mouse events at viewport (CSS px) coordinates of a visible tab.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" },
+          {
+            "name": "events",
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": { "type": "any" } }
+          }
+        ]
+      },
+      {
+        "name": "wheel",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          { "name": "tabId", "type": "integer" },
+          { "name": "x", "type": "number" },
+          { "name": "y", "type": "number" },
+          { "name": "deltaX", "type": "number" },
+          { "name": "deltaY", "type": "number" }
+        ]
+      },
+      {
+        "name": "keys",
+        "type": "function",
+        "async": true,
+        "description": "Press keys in the tab's focused element. Each key is { key, ctrlKey?, shiftKey?, altKey?, metaKey? }.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" },
+          {
+            "name": "keys",
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": { "type": "any" } }
+          }
+        ]
+      },
+      {
+        "name": "text",
+        "type": "function",
+        "async": true,
+        "description": "Type a string into the tab's focused element, one key press per character.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" },
+          { "name": "text", "type": "string" }
+        ]
+      },
+      {
+        "name": "splitView",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          { "name": "tabIds", "type": "array", "items": { "type": "integer" } },
+          { "name": "layout", "type": "string" }
+        ]
+      },
+      {
+        "name": "dismissPopups",
+        "type": "function",
+        "async": true,
+        "parameters": [{ "name": "tabId", "type": "integer" }]
+      }
+    ]
+  }
+]

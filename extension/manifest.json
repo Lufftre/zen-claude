@@ -1,0 +1,66 @@
+{
+  "manifest_version": 2,
+  "name": "Claude for Zen",
+  "version": "0.1.3",
+  "description": "Lets Claude Code control this browser through a local MCP server.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "zen-claude@local",
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "webRequest",
+    "webNavigation",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_action": {
+    "default_title": "Claude for Zen",
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon.svg"
+  },
+  "experiment_apis": {
+    "trustedInput": {
+      "schema": "experiments/trustedInput/schema.json",
+      "parent": {
+        "scopes": [
+          "addon_parent"
+        ],
+        "script": "experiments/trustedInput/parent.js",
+        "paths": [
+          [
+            "trustedInput"
+          ]
+        ]
+      }
+    }
+  }
+}

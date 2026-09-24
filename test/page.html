@@ -1,0 +1,23 @@
+<!doctype html><html><head><title>zen-claude test</title></head><body style="font:16px sans-serif;padding:20px">
+<h1>Test page</h1>
+<form id="f" onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'submitted: ' + q.value + ' / ' + sel.value + ' / ' + cb.checked; console.log('form submitted', {q: q.value})">
+  <label>Query <input id="q" name="q" placeholder="Type here"></label>
+  <select id="sel"><option value="a">Apple</option><option value="b">Banana</option></select>
+  <label><input type="checkbox" id="cb"> Agree</label>
+  <button type="submit">Send</button>
+</form>
+<button id="btn" onclick="this.textContent = 'clicked ' + (++window.n || (window.n = 1))">Click me</button>
+<p id="out">idle</p>
+<div id="box" style="height:150px;overflow:auto;border:1px solid #999"><div style="height:1000px">scroll box</div></div>
+<script>console.warn('page loaded'); console.log('obj', {a: 1, b: [1, 2]}); console.error(new TypeError('bad thing')); setTimeout(() => { throw new Error('boom') }, 10)</script>
+<p id="trust">no events</p>
+<script>
+  const seen = {};
+  for (const t of ['click', 'mousedown', 'keydown', 'input', 'wheel', 'dblclick']) {
+    addEventListener(t, (e) => { seen[t] = e.isTrusted; document.getElementById('trust').textContent = JSON.stringify(seen); }, true);
+  }
+  document.getElementById('btn').addEventListener('click', () => {
+    document.getElementById('out').textContent = 'userActivation=' + navigator.userActivation.isActive;
+  });
+</script>
+</body></html>

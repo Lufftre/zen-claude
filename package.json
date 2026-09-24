@@ -1,0 +1,23 @@
+{
+  "name": "zen-claude",
+  "version": "0.1.0",
+  "description": "Let Claude Code control Zen / Firefox via an MCP server and a WebExtension",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "zen-claude-mcp": "server/index.js"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "ext:run": "web-ext run --source-dir extension --firefox=/Applications/Zen.app/Contents/MacOS/zen --pref zen.welcome-screen.seen=true --pref extensions.experiments.enabled=true",
+    "ext:build": "node scripts/build.mjs",
+    "ext:lint": "web-ext lint --source-dir extension"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "web-ext": "^8.0.0"
+  }
+}
