@@ -9,6 +9,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TOOLS } from './tools.js';
 
@@ -17,6 +18,8 @@ const HOST = '127.0.0.1';
 const PEER_HEADER = 'x-zen-claude-peer';
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXTENSION_GRACE_MS = 5_000;
+// Identifies this Claude session to the extension, which keeps per-session state such as a dedicated window.
+const SESSION = { id: randomUUID(), ownWindow: process.env.ZEN_CLAUDE_WINDOW === '1' };
 
 const log = (...args) => console.error('[zen-claude]', ...args);
 
@@ -161,7 +164,7 @@ class Bridge {
         reject(new Error(`Timed out after ${REQUEST_TIMEOUT_MS / 1000}s waiting for the browser.`));
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, method, params }));
+      socket.send(JSON.stringify({ id, method, params, session: SESSION }));
     });
   }
 }
@@ -181,7 +184,8 @@ const server = new Server(
     instructions:
       'Tools for controlling the user\'s Zen/Firefox browser. Start with tabs_context to see open tabs. ' +
       'Prefer read_page/find + ref-based actions over coordinates; use screenshots to verify visual state. ' +
-      'Use form_input for native <select> elements.',
+      'Use form_input for native <select> elements. Call session_window to work in a window of your own, which lets ' +
+      'you drive the browser without switching tabs in the window the user is looking at.',
   },
 );
 

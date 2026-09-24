@@ -4,6 +4,27 @@
     "description": "Browser-level (isTrusted) mouse, keyboard and wheel input, synthesized in the parent process.",
     "functions": [
       {
+        "name": "openWindow",
+        "type": "function",
+        "async": true,
+        "description": "Open a new browser window (unsynced in Zen) and return its window ID.",
+        "parameters": []
+      },
+      {
+        "name": "activeWindowId",
+        "type": "function",
+        "async": true,
+        "description": "ID of the browser window that has Gecko focus, or -1.",
+        "parameters": []
+      },
+      {
+        "name": "activateWindow",
+        "type": "function",
+        "async": true,
+        "description": "Give a browser window Gecko focus without raising it on screen.",
+        "parameters": [{ "name": "windowId", "type": "integer" }]
+      },
+      {
         "name": "status",
         "type": "function",
         "async": true,

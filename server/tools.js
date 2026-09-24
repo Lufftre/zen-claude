@@ -3,7 +3,9 @@
 
 const tabId = {
   type: 'number',
-  description: 'Target tab ID (from tabs_context). Defaults to the active tab of the focused window.',
+  description:
+    "Target tab ID (from tabs_context). Defaults to the active tab of this session's window (see session_window), " +
+    'or of the focused window.',
 };
 const ref = {
   type: 'string',
@@ -19,8 +21,19 @@ const coordinate = {
 
 export const TOOLS = [
   {
+    name: 'session_window',
+    description:
+      'Give this session its own browser window. Afterwards tabs_context, tabs_create and calls without tabId use ' +
+      'that window, and screenshots and input there no longer switch tabs in the window the user is looking at. ' +
+      'Other sessions keep their own windows. Calling it again returns the existing window. close: true closes the ' +
+      "window and goes back to sharing the user's focused window.",
+    inputSchema: { type: 'object', properties: { close: { type: 'boolean' } } },
+  },
+  {
     name: 'tabs_context',
-    description: 'List open tabs (id, title, URL, active state) in the focused window, or all windows.',
+    description:
+      "List open tabs (id, title, URL, active state) in this session's window (see session_window) or the focused " +
+      'window, or in all windows.',
     inputSchema: {
       type: 'object',
       properties: { all_windows: { type: 'boolean', description: 'Include tabs from every window.' } },
@@ -28,7 +41,9 @@ export const TOOLS = [
   },
   {
     name: 'tabs_create',
-    description: 'Open a new tab, optionally at a URL. The new tab becomes active.',
+    description:
+      "Open a new tab, optionally at a URL, in this session's window (see session_window) or the focused window. " +
+      'The new tab becomes active.',
     inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
   },
   {

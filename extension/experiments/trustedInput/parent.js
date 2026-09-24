@@ -133,6 +133,39 @@ this.trustedInput = class extends ExtensionAPI {
           splitter.splitTabs(tabs, gridType);
         },
 
+        // A new browser window. In Zen it is opened unsynced: synced windows mirror each other's tabs and move a
+        // tab's page into whichever window selects it, so a synced window can't be driven independently.
+        async openWindow() {
+          // Same as Zen's "New Unsynced Window" command.
+          const opener = Services.wm.getMostRecentWindow("navigator:browser");
+          const openerWasActive = Services.focus.activeWindow === opener;
+          const win = opener.OpenBrowserWindow({ zenSyncedWindow: false });
+          await new Promise(resolve => {
+            const observer = subject => {
+              if (subject !== win) return;
+              Services.obs.removeObserver(observer, "browser-delayed-startup-finished");
+              resolve();
+            };
+            Services.obs.addObserver(observer, "browser-delayed-startup-finished");
+          });
+          // Put the user's window back in front; the new one stays behind it.
+          if (openerWasActive) opener.focus();
+          return context.extension.windowManager.getWrapper(win).id;
+        },
+
+        // Gecko's active window, which receives key events. Input into a background window takes it over, so callers
+        // hand it back afterwards with activateWindow.
+        async activeWindowId() {
+          const win = Services.focus.activeWindow;
+          if (!win || win.document.documentElement.getAttribute("windowtype") !== "navigator:browser") return -1;
+          return context.extension.windowManager.getWrapper(win).id;
+        },
+
+        async activateWindow(windowId) {
+          const win = context.extension.windowManager.get(windowId, context)?.window;
+          if (win) await activateWithoutRaising(win);
+        },
+
         async status() {
           try {
             eventUtils(Services.wm.getMostRecentWindow("navigator:browser"));

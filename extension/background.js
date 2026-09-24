@@ -104,7 +104,7 @@ function statusText() {
 async function onRequest(ws, data) {
   let msg;
   try { msg = JSON.parse(data); } catch { return; }
-  const { id, method, params = {} } = msg;
+  const { id, method, params = {}, session } = msg;
   const entry = { time: Date.now(), method, summary: summarize(method, params), ok: null };
   state.activity.unshift(entry);
   state.activity.length = Math.min(state.activity.length, 30);
@@ -112,7 +112,7 @@ async function onRequest(ws, data) {
   try {
     const handler = handlers[method];
     if (!handler) throw new Error(`Unknown method: ${method}`);
-    reply = { id, result: await handler(params) };
+    reply = { id, result: await handler(params, sessionFor(session)) };
     entry.ok = true;
   } catch (err) {
     reply = { id, error: err?.message || String(err) };
@@ -130,9 +130,10 @@ function summarize(method, p) {
 // ---------------------------------------------------------------------------
 // Helpers
 
-async function resolveTab(tabId) {
+async function resolveTab(tabId, sess) {
   if (tabId != null) return browser.tabs.get(tabId);
-  const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+  const windowId = (await sessionWindow(sess)) ?? (await userWindow());
+  const [tab] = await browser.tabs.query({ active: true, windowId });
   if (!tab) throw new Error('No active tab found.');
   return tab;
 }
@@ -195,18 +196,105 @@ async function ensureActive(tab) {
 }
 
 async function capture(tab, { rect, scale = 1 } = {}) {
-  await ensureActive(tab);
-  const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, {
-    format: 'jpeg',
-    quality: 80,
-    scale, // Firefox: 1 => one image pixel per CSS pixel, so coordinates map directly
-    ...(rect ? { rect } : {}),
+  const dataUrl = await exclusive(async () => {
+    await ensureActive(tab);
+    return browser.tabs.captureVisibleTab(tab.windowId, {
+      format: 'jpeg',
+      quality: 80,
+      scale, // Firefox: 1 => one image pixel per CSS pixel, so coordinates map directly
+      ...(rect ? { rect } : {}),
+    });
   });
   return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/jpeg' };
 }
 
 async function viewportInfo(tabId) {
   try { return await sendToContent(tabId, { type: 'viewport' }); } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// Sessions. Each MCP server (one per Claude session) sends an id; a session that opts in gets a window of its own,
+// so its tab switches and screenshots don't disturb the window the user is looking at.
+
+const sessions = new Map(); // session id -> { own, windowId }
+
+function sessionFor(s) {
+  if (!s?.id) return null;
+  let sess = sessions.get(s.id);
+  if (!sess) sessions.set(s.id, (sess = { own: !!s.ownWindow, windowId: null }));
+  return sess;
+}
+
+async function sessionWindow(sess) {
+  if (!sess?.own) return null;
+  if (sess.windowId != null) {
+    try {
+      await browser.windows.get(sess.windowId);
+      return sess.windowId;
+    } catch {
+      sess.windowId = null;
+    }
+  }
+  // Concurrent calls from one session share a single new window.
+  sess.creating ??= openWindow()
+    .then((id) => (sess.windowId = id))
+    .finally(() => { sess.creating = null; });
+  return sess.creating;
+}
+
+let openWindowError = null;
+
+async function openWindow() {
+  // Zen's windows.create gives a synced window, which mirrors the user's tabs; the experiment opens an unsynced one.
+  if (browser.trustedInput?.openWindow) {
+    try {
+      openWindowError = null;
+      return await browser.trustedInput.openWindow();
+    } catch (err) {
+      openWindowError = err.message;
+    }
+  }
+  return (await browser.windows.create({})).id;
+}
+
+browser.windows.onRemoved.addListener((windowId) => {
+  for (const sess of sessions.values()) if (sess.windowId === windowId) sess.windowId = null;
+});
+
+const isSessionWindow = (windowId) => [...sessions.values()].some((s) => s.windowId === windowId);
+
+// Sessions without a window of their own work in the window the user last focused. Session windows get focus while
+// they open and while input is sent to them, possibly before they are known to belong to a session, so keep a short
+// focus history and skip them when reading it.
+const focusHistory = []; // most recent last
+browser.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === browser.windows.WINDOW_ID_NONE) return;
+  const i = focusHistory.indexOf(windowId);
+  if (i !== -1) focusHistory.splice(i, 1);
+  focusHistory.push(windowId);
+  if (focusHistory.length > 20) focusHistory.shift();
+});
+browser.windows.onRemoved.addListener((windowId) => {
+  const i = focusHistory.indexOf(windowId);
+  if (i !== -1) focusHistory.splice(i, 1);
+});
+
+async function userWindow() {
+  const recent = focusHistory.findLast((id) => !isSessionWindow(id));
+  if (recent != null) return recent;
+  const last = await browser.windows.getLastFocused({ windowTypes: ['normal'] });
+  if (!isSessionWindow(last.id)) return last.id;
+  const other = (await browser.windows.getAll({ windowTypes: ['normal'] })).find((w) => !isSessionWindow(w.id));
+  return (other ?? last).id;
+}
+
+// Trusted input and screenshots need the target tab to be the visible one, so run them one at a time; otherwise two
+// sessions can activate tabs under each other or interleave events.
+let exclusiveQueue = Promise.resolve();
+function exclusive(fn) {
+  const run = exclusiveQueue.then(fn, fn);
+  exclusiveQueue = run.catch(() => {});
+  return run;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +407,18 @@ async function ensureInputReady(ti, tab, preferred) {
   throw new Error('The tab did not start accepting input within 3s.');
 }
 
+// Input into a session's window makes it Gecko's active window, so keys the user types elsewhere in the browser would
+// land there. Hand focus back to the window that had it.
+async function withFocusReturned(ti, tab, fn) {
+  if (!isSessionWindow(tab.windowId) || !ti.activeWindowId) return fn();
+  const previous = await ti.activeWindowId();
+  try {
+    return await fn();
+  } finally {
+    if (previous !== -1 && !isSessionWindow(previous)) await ti.activateWindow(previous).catch(() => {});
+  }
+}
+
 async function trustedAction(ti, tab, p) {
   await ensureActive(tab);
   if (p.action !== 'scroll_to') await ensureInputReady(ti, tab, p.coordinate || p.start_coordinate);
@@ -403,19 +503,37 @@ async function trustedAction(ti, tab, p) {
 }
 
 const handlers = {
-  async tabs_context({ all_windows }) {
+  async session_window({ close }, sess) {
+    if (!sess) throw new Error('This MCP server does not send a session id; update it.');
+    if (close) {
+      const windowId = sess.windowId;
+      sess.own = false;
+      sess.windowId = null;
+      if (windowId != null) await browser.windows.remove(windowId).catch(() => {});
+      return { text: "Closed this session's window. Calls now use the focused window." };
+    }
+    sess.own = true;
+    const win = await browser.windows.get(await sessionWindow(sess), { populate: true });
+    const note = openWindowError ? `\nNote: could not open an unsynced window (${openWindowError}); it may mirror other windows' tabs.` : '';
+    return { text: `This session's window is ${win.id}. Tabs:\n${win.tabs.map(describeTab).join('\n')}${note}` };
+  },
+
+  async tabs_context({ all_windows }, sess) {
+    const own = await sessionWindow(sess);
     const windows = all_windows
       ? await browser.windows.getAll({ populate: true, windowTypes: ['normal'] })
-      : [await browser.windows.getLastFocused({ populate: true })];
+      : [await browser.windows.get(own ?? (await userWindow()), { populate: true })];
     const blocks = windows.map((w) => {
-      const header = `Window ${w.id} (${w.state}, ${w.width}x${w.height}${w.focused ? ', focused' : ''}):`;
+      const flags = [w.focused && 'focused', w.id === own && "this session's window"].filter(Boolean).map((f) => `, ${f}`).join('');
+      const header = `Window ${w.id} (${w.state}, ${w.width}x${w.height}${flags}):`;
       return `${header}\n${w.tabs.map(describeTab).join('\n')}`;
     });
     return { text: `(* = active tab)\n${blocks.join('\n\n')}` };
   },
 
-  async tabs_create({ url }) {
-    const tab = await browser.tabs.create({ url: url || undefined, active: true });
+  async tabs_create({ url }, sess) {
+    const windowId = (await sessionWindow(sess)) ?? (await userWindow());
+    const tab = await browser.tabs.create({ url: url || undefined, active: true, windowId });
     if (url) await waitForLoad(tab.id);
     const t = await browser.tabs.get(tab.id);
     return { text: `Created tab ${t.id}: ${t.title}\n${t.url}` };
@@ -426,14 +544,15 @@ const handlers = {
     return { text: `Closed tab ${tabId}` };
   },
 
-  async tabs_activate({ tabId }) {
+  async tabs_activate({ tabId }, sess) {
     const tab = await browser.tabs.update(tabId, { active: true });
-    await browser.windows.update(tab.windowId, { focused: true });
+    // Bringing a session's own window forward would defeat its purpose.
+    if (!sess?.own) await browser.windows.update(tab.windowId, { focused: true });
     return { text: `Activated tab ${tabId}: ${tab.title}` };
   },
 
-  async navigate({ url, tabId }) {
-    const tab = await resolveTab(tabId);
+  async navigate({ url, tabId }, sess) {
+    const tab = await resolveTab(tabId, sess);
     const loaded = waitForLoad(tab.id);
     if (url === 'back') await browser.tabs.goBack(tab.id);
     else if (url === 'forward') await browser.tabs.goForward(tab.id);
@@ -446,8 +565,8 @@ const handlers = {
     return { text: `Tab ${t.id} loaded: ${t.title}\n${t.url}` };
   },
 
-  async computer(p) {
-    const tab = await resolveTab(p.tabId);
+  async computer(p, sess) {
+    const tab = await resolveTab(p.tabId, sess);
     switch (p.action) {
       case 'screenshot': {
         const image = await capture(tab);
@@ -477,7 +596,7 @@ const handlers = {
         const ti = await trustedInput();
         if (ti) {
           try {
-            const text = await trustedAction(ti, tab, p);
+            const text = await exclusive(() => withFocusReturned(ti, tab, () => trustedAction(ti, tab, p)));
             if (text != null) return { text };
           } catch (err) {
             if (/message manager disconnected|Receiving end|context unloaded/i.test(err.message)) {
@@ -502,30 +621,30 @@ const handlers = {
     }
   },
 
-  async read_page({ tabId, ...opts }) {
-    const tab = await resolveTab(tabId);
+  async read_page({ tabId, ...opts }, sess) {
+    const tab = await resolveTab(tabId, sess);
     const text = await sendToContent(tab.id, { type: 'readPage', ...opts });
     return { text: `Tab ${tab.id}: ${tab.title}\n${tab.url}\n\n${text}` };
   },
 
-  async find({ tabId, query }) {
-    const tab = await resolveTab(tabId);
+  async find({ tabId, query }, sess) {
+    const tab = await resolveTab(tabId, sess);
     return { text: await sendToContent(tab.id, { type: 'find', query }) };
   },
 
-  async form_input({ tabId, ref, value }) {
-    const tab = await resolveTab(tabId);
+  async form_input({ tabId, ref, value }, sess) {
+    const tab = await resolveTab(tabId, sess);
     return { text: await sendToContent(tab.id, { type: 'formInput', ref, value }) };
   },
 
-  async get_page_text({ tabId, max_chars }) {
-    const tab = await resolveTab(tabId);
+  async get_page_text({ tabId, max_chars }, sess) {
+    const tab = await resolveTab(tabId, sess);
     const text = await sendToContent(tab.id, { type: 'pageText', max_chars });
     return { text: `${tab.title}\n${tab.url}\n\n${text}` };
   },
 
-  async javascript_tool({ tabId, code }) {
-    const tab = await resolveTab(tabId);
+  async javascript_tool({ tabId, code }, sess) {
+    const tab = await resolveTab(tabId, sess);
     const wrap = (body) => `(async () => ${body})().then(
       (v) => { try { return { ok: v === undefined ? 'undefined' : JSON.stringify(v, null, 2) ?? String(v) } }
                catch { return { ok: String(v) } } },
@@ -542,13 +661,13 @@ const handlers = {
     return { text: r?.ok ?? 'undefined' };
   },
 
-  async read_console_messages({ tabId, ...opts }) {
-    const tab = await resolveTab(tabId);
+  async read_console_messages({ tabId, ...opts }, sess) {
+    const tab = await resolveTab(tabId, sess);
     return { text: await sendToContent(tab.id, { type: 'console', ...opts }) };
   },
 
-  async read_network_requests({ tabId, url_pattern, limit = 100, clear }) {
-    const tab = await resolveTab(tabId);
+  async read_network_requests({ tabId, url_pattern, limit = 100, clear }, sess) {
+    const tab = await resolveTab(tabId, sess);
     let list = network.get(tab.id) || [];
     if (url_pattern) {
       let re;
@@ -569,8 +688,8 @@ const handlers = {
     return { text: layout === 'unsplit' ? 'Split view closed.' : `Tabs ${tabIds.join(', ')} are now split (${layout}).` };
   },
 
-  async resize_window({ tabId, width, height }) {
-    const tab = await resolveTab(tabId);
+  async resize_window({ tabId, width, height }, sess) {
+    const tab = await resolveTab(tabId, sess);
     const win = await browser.windows.update(tab.windowId, { width: Math.round(width), height: Math.round(height), state: 'normal' });
     return { text: `Window resized to ${win.width}x${win.height}.` };
   },

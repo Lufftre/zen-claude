@@ -16,6 +16,32 @@ Claude Code ──stdio/MCP──▶ server/index.js ──ws://127.0.0.1:8765�
 - If several browsers run the extension, the first one to connect is used; the others wait (popup shows "another
   browser is connected").
 
+## Multiple Claude sessions
+
+By default every session shares the window you last focused: calls without `tabId` go to its active tab, and
+screenshots and trusted input switch tabs there. That's fine for one session, or for sessions that only read pages.
+
+A session can opt into a **window of its own**, either by calling the `session_window` tool (e.g. tell Claude "use
+your own browser window") or for every call from the start with `ZEN_CLAUDE_WINDOW=1`:
+
+```sh
+claude mcp add --scope user zen-browser-own -e ZEN_CLAUDE_WINDOW=1 -- node "$PWD/server/index.js"
+```
+
+Its `tabs_context`, `tabs_create` and calls without `tabId` then use that window, so it can switch tabs, take
+screenshots and send trusted input while you keep working in your own window. It works while the window is behind
+others, since Firefox only draws a window's active tab, not the frontmost window. It needs to be open, not
+minimized. `session_window` with `close: true` closes it and goes back to sharing.
+
+- In Zen the window is opened *unsynced* (like *New Unsynced Window*). Synced windows mirror each other's tabs and
+  move a tab's page into whichever window selects it, so they can't be driven independently. Without the experiment
+  the extension falls back to `windows.create`, which gives a synced window in Zen.
+- The new window opens behind yours when Zen is frontmost.
+- Trusted input and screenshots from all sessions run one at a time, so sessions can't activate tabs under each
+  other or interleave events.
+- Input into a session window makes it Gecko's active window; afterwards focus is handed back to the window that had
+  it, so keys you type in your window stay there.
+
 ## Setup
 
 ```sh
@@ -54,6 +80,7 @@ log of recent tool calls.
 
 | Tool | What it does |
 | --- | --- |
+| `session_window` | Give this session its own (unsynced) window, or close it |
 | `tabs_context` | Windows (state, size) and their tabs |
 | `tabs_create` / `tabs_close` / `tabs_activate` | Tab management |
 | `navigate` | Load a URL (or `back` / `forward`) and wait for load |
@@ -111,6 +138,9 @@ scripts/test-instance.sh &
 ZEN_CLAUDE_PORT=8766 node test/smoke.js '[["navigate",{"url":"http://localhost:8931/page.html"}],["read_page",{}]]'
 ZEN_CLAUDE_PORT=8766 node test/diag.mjs '[{"action":"left_click","coordinate":[170,115]},{"action":"type","text":"abc"}]'
 ```
+
+Stopping `web-ext` can leave the Zen it launched running. Leftover instances compete for port 8766 with old
+extension code, so check `pgrep -fl firefox-profile` between runs.
 
 `test/smoke.js` runs a list of tool calls. `test/diag.mjs` opens a fresh tab of the test page, runs `computer` actions,
 and prints which events reached the page (with `isTrusted`), then closes the tab.
