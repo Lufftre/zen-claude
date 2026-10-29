@@ -25,9 +25,16 @@ export const TOOLS = [
     description:
       'Give this session its own browser window. Afterwards tabs_context, tabs_create and calls without tabId use ' +
       'that window, and screenshots and input there no longer switch tabs in the window the user is looking at. ' +
-      'Other sessions keep their own windows. Calling it again returns the existing window. close: true closes the ' +
-      "window and goes back to sharing the user's focused window.",
-    inputSchema: { type: 'object', properties: { close: { type: 'boolean' } } },
+      'Other sessions keep their own windows. Calling it again returns the existing window. The window title names ' +
+      'this session (by default after the conversation title or folder) so the user can tell whose window it is; ' +
+      "pass name to choose it. close: true closes the window and goes back to sharing the user's focused window.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Short name for the window, e.g. the task you are working on.' },
+        close: { type: 'boolean' },
+      },
+    },
   },
   {
     name: 'tabs_context',

@@ -9,6 +9,7 @@
 
 const { ExtensionUtils } = ChromeUtils.importESModule("resource://gre/modules/ExtensionUtils.sys.mjs");
 const { ExtensionError } = ExtensionUtils;
+const { ExtensionCommon } = ChromeUtils.importESModule("resource://gre/modules/ExtensionCommon.sys.mjs");
 
 // Mozilla's test/WebDriver input helpers, shipped with the browser's remote agent.
 const EVENT_UTILS_URL = "chrome://remote/content/external/EventUtils.js";
@@ -67,9 +68,39 @@ function focusBrowser(browser) {
   if (Services.focus.focusedElement !== browser) browser.focus();
 }
 
+const LABEL_ID = "claude-for-zen-window-label";
+
+// Zen hides the window title and usually the extension's toolbar button, so a session's window is named by a label
+// at the top of its sidebar instead.
+function setWindowLabel(win, text, tooltip, onClick) {
+  const doc = win.document;
+  let label = doc.getElementById(LABEL_ID);
+  if (text == null) return label?.remove();
+  if (!label) {
+    label = doc.createElementNS("http://www.w3.org/1999/xhtml", "button");
+    label.id = LABEL_ID;
+    label.style.cssText =
+      "display: block; margin: 6px 8px; padding: 4px 8px; border: 0; border-radius: 6px; background: #d97757; " +
+      "color: #fff; font: 600 12px system-ui, sans-serif; text-align: start; overflow-wrap: anywhere; " +
+      "cursor: pointer; -moz-window-dragging: no-drag;";
+    label.addEventListener("click", onClick);
+    // Above the tab list, under Zen's URL bar; in Firefox, at the top of the toolbars.
+    const tabs = doc.getElementById("tabbrowser-tabs");
+    if (tabs && Services.prefs.getBoolPref("zen.tabs.vertical", false)) tabs.before(label);
+    else doc.getElementById("navigator-toolbox")?.prepend(label);
+  }
+  label.textContent = text;
+  label.title = tooltip || "";
+}
+
 this.trustedInput = class extends ExtensionAPI {
+  onShutdown() {
+    for (const win of Services.wm.getEnumerator("navigator:browser")) setWindowLabel(win, null);
+  }
+
   getAPI(context) {
     const { tabManager } = context.extension;
+    const labelClickListeners = new Set();
 
     function resolve(tabId) {
       let nativeTab;
@@ -164,6 +195,14 @@ this.trustedInput = class extends ExtensionAPI {
         async activateWindow(windowId) {
           const win = context.extension.windowManager.get(windowId, context)?.window;
           if (win) await activateWithoutRaising(win);
+        },
+
+        async labelWindow(windowId, text, tooltip) {
+          const win = context.extension.windowManager.get(windowId, context)?.window;
+          if (!win) throw new ExtensionError(`Invalid window ID: ${windowId}`);
+          setWindowLabel(win, text, tooltip, () => {
+            for (const fire of labelClickListeners) fire.async(windowId);
+          });
         },
 
         async status() {
@@ -274,6 +313,14 @@ this.trustedInput = class extends ExtensionAPI {
         }
       };
     }
+    wrapped.onWindowLabelClicked = new ExtensionCommon.EventManager({
+      context,
+      name: "trustedInput.onWindowLabelClicked",
+      register: fire => {
+        labelClickListeners.add(fire);
+        return () => labelClickListeners.delete(fire);
+      },
+    }).api();
     return { trustedInput: wrapped };
   }
 };

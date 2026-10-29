@@ -94,6 +94,25 @@
         "type": "function",
         "async": true,
         "parameters": [{ "name": "tabId", "type": "integer" }]
+      },
+      {
+        "name": "labelWindow",
+        "type": "function",
+        "async": true,
+        "description": "Show a label naming the window's owner in its sidebar, or remove it when text is null.",
+        "parameters": [
+          { "name": "windowId", "type": "integer" },
+          { "name": "text", "type": "string", "optional": true },
+          { "name": "tooltip", "type": "string", "optional": true }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onWindowLabelClicked",
+        "type": "function",
+        "description": "The user clicked a window's label.",
+        "parameters": [{ "name": "windowId", "type": "integer" }]
       }
     ]
   }

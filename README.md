@@ -21,8 +21,10 @@ Claude Code ──stdio/MCP──▶ server/index.js ──ws://127.0.0.1:8765�
 By default every session shares the window you last focused: calls without `tabId` go to its active tab, and
 screenshots and trusted input switch tabs there. That's fine for one session, or for sessions that only read pages.
 
-A session can opt into a **window of its own**, either by calling the `session_window` tool (e.g. tell Claude "use
-your own browser window") or for every call from the start with `ZEN_CLAUDE_WINDOW=1`:
+Sessions are told to work in a **window of their own** unless you point them at a page you have open, mark
+something, or ask them to use your window. They do that by calling the `session_window` tool. `ZEN_CLAUDE_WINDOW=1`
+makes every call from the start use the session's window, and `ZEN_CLAUDE_WINDOW=0` drops the advice, so sessions
+only open a window when asked to:
 
 ```sh
 claude mcp add --scope user zen-browser-own -e ZEN_CLAUDE_WINDOW=1 -- node "$PWD/server/index.js"
@@ -33,6 +35,10 @@ screenshots and send trusted input while you keep working in your own window. It
 others, since Firefox only draws a window's active tab, not the frontmost window. It needs to be open, not
 minimized. `session_window` with `close: true` closes it and goes back to sharing.
 
+- The window is named after its session: the conversation's title when Claude Code runs in a Rex
+  pane, the folder otherwise, or a name the session passes to `session_window`. The name shows in a label at the
+  top of the window's sidebar, in its title (Window menu, Cmd-\`, Mission Control) and in the extension's popup.
+- Clicking the label, or *Show terminal* in the popup, brings Rex forward with that session's pane focused.
 - In Zen the window is opened *unsynced* (like *New Unsynced Window*). Synced windows mirror each other's tabs and
   move a tab's page into whichever window selects it, so they can't be driven independently. Without the experiment
   the extension falls back to `windows.create`, which gives a synced window in Zen.

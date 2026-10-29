@@ -27,6 +27,10 @@
 </head>
 <body>
   <header><img src="icons/icon.svg" alt=""><h1>Claude for Zen</h1></header>
+  <div class="row" id="sessionRow" hidden>
+    <span>Window of <b id="sessionName"></b></span>
+    <button id="showTerminal" hidden>Show terminal</button>
+  </div>
   <div class="row">
     <span class="status"><span id="dot" class="dot"></span><span id="status">…</span></span>
     <label><input type="checkbox" id="enabled"> Allow control</label>

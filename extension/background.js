@@ -92,6 +92,12 @@ function updateBadge() {
   browser.browserAction.setBadgeText({ text });
   browser.browserAction.setBadgeBackgroundColor({ color });
   browser.browserAction.setTitle({ title: `Claude for Zen – ${statusText()}` });
+  // A session's window shows a mark while connected, and the connection state otherwise.
+  for (const sess of sessions.values()) {
+    if (sess.windowId == null) continue;
+    browser.browserAction.setBadgeText({ windowId: sess.windowId, text: state.connected ? '◆' : null }).catch(() => {});
+    browser.browserAction.setBadgeBackgroundColor({ windowId: sess.windowId, color: state.connected ? '#d97757' : null }).catch(() => {});
+  }
 }
 
 function statusText() {
@@ -221,9 +227,35 @@ const sessions = new Map(); // session id -> { own, windowId }
 function sessionFor(s) {
   if (!s?.id) return null;
   let sess = sessions.get(s.id);
-  if (!sess) sessions.set(s.id, (sess = { own: !!s.ownWindow, windowId: null }));
+  if (!sess) sessions.set(s.id, (sess = { id: s.id, own: !!s.ownWindow, windowId: null, name: null }));
+  if (s.label !== sess.label || !!s.terminal !== sess.terminal) {
+    sess.label = s.label;
+    sess.terminal = !!s.terminal;
+    nameWindow(sess);
+  }
   return sess;
 }
+
+// Name the window after its session, so the user can tell whose it is: in its title (Window menu, Cmd-`, Mission
+// Control), on the toolbar button and, since Zen shows neither by default, in a label in its sidebar that brings up
+// the session's terminal.
+function nameWindow(sess) {
+  if (sess.windowId == null) return;
+  const name = sess.name || sess.label;
+  browser.windows.update(sess.windowId, { titlePreface: name ? `Claude: ${name} — ` : 'Claude — ' }).catch(() => {});
+  browser.browserAction.setTitle({ windowId: sess.windowId, title: `Claude for Zen – window of ${name || 'a Claude session'}` });
+  const tooltip = sess.terminal ? 'Click to show the terminal running this Claude session' : "This Claude session's window";
+  browser.trustedInput?.labelWindow(sess.windowId, `◆ Claude: ${name || 'session'}`, tooltip).catch(() => {});
+  updateBadge();
+}
+
+function focusTerminal(windowId) {
+  const sess = [...sessions.values()].find((s) => s.windowId === windowId);
+  if (sess?.terminal && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'focusTerminal', session: sess.id }));
+  }
+}
+browser.trustedInput?.onWindowLabelClicked.addListener(focusTerminal);
 
 async function sessionWindow(sess) {
   if (!sess?.own) return null;
@@ -237,7 +269,11 @@ async function sessionWindow(sess) {
   }
   // Concurrent calls from one session share a single new window.
   sess.creating ??= openWindow()
-    .then((id) => (sess.windowId = id))
+    .then((id) => {
+      sess.windowId = id;
+      nameWindow(sess);
+      return id;
+    })
     .finally(() => { sess.creating = null; });
   return sess.creating;
 }
@@ -550,7 +586,7 @@ async function trustedAction(ti, tab, p) {
 }
 
 const handlers = {
-  async session_window({ close }, sess) {
+  async session_window({ close, name }, sess) {
     if (!sess) throw new Error('This MCP server does not send a session id; update it.');
     if (close) {
       const windowId = sess.windowId;
@@ -560,7 +596,9 @@ const handlers = {
       return { text: "Closed this session's window. Calls now use the focused window." };
     }
     sess.own = true;
+    if (name !== undefined) sess.name = name.trim() || null;
     const win = await browser.windows.get(await sessionWindow(sess), { populate: true });
+    if (name !== undefined) nameWindow(sess);
     const note = openWindowError ? `\nNote: could not open an unsynced window (${openWindowError}); it may mirror other windows' tabs.` : '';
     return { text: `This session's window is ${win.id}. Tabs:\n${win.tabs.map(describeTab).join('\n')}${note}` };
   },
@@ -829,6 +867,11 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
     return;
   }
   if (msg.type === 'startMarking') return startMarking(msg.tabId);
+  if (msg.type === 'getWindowSession') {
+    const sess = [...sessions.values()].find((s) => s.windowId === msg.windowId);
+    return sess && { name: sess.name || sess.label, terminal: sess.terminal && state.connected };
+  }
+  if (msg.type === 'focusTerminal') return focusTerminal(msg.windowId);
   if (msg.type === 'getState') {
     await checkTrustedAvailable();
     return {

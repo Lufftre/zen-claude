@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const currentWindow = browser.windows.getCurrent();
 
 async function refresh() {
   const s = await browser.runtime.sendMessage({ type: 'getState' });
@@ -10,6 +11,10 @@ async function refresh() {
   $('dot').className = `dot ${!s.enabled ? '' : s.connected ? 'ok' : 'bad'}`;
   $('status').textContent = s.status[0].toUpperCase() + s.status.slice(1);
   $('hint').hidden = !s.enabled || s.connected;
+  const sess = await browser.runtime.sendMessage({ type: 'getWindowSession', windowId: (await currentWindow).id });
+  $('sessionRow').hidden = !sess;
+  $('sessionName').textContent = sess?.name || 'a Claude session';
+  $('showTerminal').hidden = !sess?.terminal;
   const list = $('activity');
   list.replaceChildren();
   if (!s.activity.length) {
@@ -41,6 +46,10 @@ $('trusted').addEventListener('change', async (e) => {
 $('port').addEventListener('change', async (e) => {
   await browser.runtime.sendMessage({ type: 'setPort', port: e.target.value });
   refresh();
+});
+$('showTerminal').addEventListener('click', async () => {
+  await browser.runtime.sendMessage({ type: 'focusTerminal', windowId: (await currentWindow).id });
+  window.close();
 });
 $('mark').addEventListener('click', async () => {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });

@@ -10,6 +10,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TOOLS } from './tools.js';
 
@@ -18,8 +21,14 @@ const HOST = '127.0.0.1';
 const PEER_HEADER = 'x-zen-claude-peer';
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXTENSION_GRACE_MS = 5_000;
-// Identifies this Claude session to the extension, which keeps per-session state such as a dedicated window.
-const SESSION = { id: randomUUID(), ownWindow: process.env.ZEN_CLAUDE_WINDOW === '1' };
+// Identifies this Claude session to the extension, which keeps per-session state such as a dedicated window. The
+// label names that window; terminal says whether the extension can ask us to bring our terminal pane forward.
+const SESSION = {
+  id: randomUUID(),
+  ownWindow: process.env.ZEN_CLAUDE_WINDOW === '1',
+  label: basename(process.cwd()),
+  terminal: !!process.env.REX_BLOCK,
+};
 
 const log = (...args) => console.error('[zen-claude]', ...args);
 
@@ -31,6 +40,7 @@ class Bridge {
     this.hubSocket = null; // peer: socket to the hub
     this.pending = new Map(); // id -> { resolve, reject, timer }
     this.relayed = new Map(); // hub: relayed id -> { peer, originalId }
+    this.peerSessions = new Map(); // hub: session id -> peer socket
     this.nextId = 1;
     this.connecting = null;
   }
@@ -79,6 +89,9 @@ class Bridge {
       // Browsers always send Origin on WebSocket handshakes, so a page can't get here.
       log('peer connected');
       ws.on('message', (data) => this.#onPeerMessage(ws, data));
+      ws.on('close', () => {
+        for (const [id, peer] of this.peerSessions) if (peer === ws) this.peerSessions.delete(id);
+      });
     } else {
       ws.close(4003, 'forbidden');
     }
@@ -88,6 +101,13 @@ class Bridge {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
     if (msg.type === 'hello') return log('extension', msg.version, msg.browser || '');
+    // The user asked, from the browser, to see the terminal pane running a session.
+    if (msg.type === 'focusTerminal') {
+      if (msg.session === SESSION.id) return focusTerminal();
+      const peer = this.peerSessions.get(msg.session);
+      if (peer?.readyState === WebSocket.OPEN) peer.send(JSON.stringify({ type: 'focusTerminal' }));
+      return;
+    }
     const relay = this.relayed.get(msg.id);
     if (relay) {
       this.relayed.delete(msg.id);
@@ -100,6 +120,7 @@ class Bridge {
   #onPeerMessage(peer, data) {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
+    if (msg.session?.id) this.peerSessions.set(msg.session.id, peer);
     if (!this.extension || this.extension.readyState !== WebSocket.OPEN) {
       peer.send(JSON.stringify({ id: msg.id, error: NOT_CONNECTED }));
       return;
@@ -120,7 +141,10 @@ class Bridge {
       });
       ws.once('error', reject);
       ws.on('message', (data) => {
-        try { this.#settle(JSON.parse(data)); } catch {}
+        let msg;
+        try { msg = JSON.parse(data); } catch { return; }
+        if (msg.type === 'focusTerminal') return focusTerminal();
+        this.#settle(msg);
       });
       ws.on('close', () => {
         if (this.hubSocket !== ws) return;
@@ -153,7 +177,7 @@ class Bridge {
   }
 
   async call(method, params) {
-    await this.ensure();
+    await Promise.all([this.ensure(), refreshLabel()]);
     if (this.mode === 'hub') await this.#waitForExtension(EXTENSION_GRACE_MS);
     const socket = this.mode === 'hub' ? this.extension : this.hubSocket;
     if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error(NOT_CONNECTED);
@@ -169,9 +193,52 @@ class Bridge {
   }
 }
 
+// Rex (the terminal multiplexer) tells programs which pane they run in. Claude Code sets the pane's title to the
+// conversation's title, which names this session's window far better than the folder does.
+const execFileP = promisify(execFile);
+const REX = process.env.REX_BIN_DIR ? join(process.env.REX_BIN_DIR, 'rex') : 'rex';
+const LABEL_TTL_MS = 10_000;
+let labelCheckedAt = 0;
+
+async function refreshLabel() {
+  if (!process.env.REX_BLOCK || Date.now() - labelCheckedAt < LABEL_TTL_MS) return;
+  labelCheckedAt = Date.now();
+  try {
+    const { stdout } = await execFileP(REX, ['block', 'call', '--block', process.env.REX_BLOCK, 'title'], { timeout: 2000 });
+    // Drop the spinner or status glyph Claude Code puts in front of the title.
+    const title = JSON.parse(stdout).title?.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    if (title && title !== 'Claude Code') SESSION.label = title;
+  } catch (err) {
+    log('could not read the terminal title:', err.message);
+  }
+}
+
+// Shows this session's Rex pane: switch the app to its session, focus the pane and bring Rex to the front.
+async function focusTerminal() {
+  const { REX_BLOCK, REX_SESSION } = process.env;
+  if (!REX_BLOCK) return;
+  try {
+    if (REX_SESSION) await execFileP(REX, ['do', 'session.select', `session_id=${REX_SESSION}`], { timeout: 5000 });
+    await execFileP(REX, ['block', 'focus', REX_BLOCK], { timeout: 5000 });
+    if (process.platform === 'darwin') await execFileP('open', ['-b', 'com.superlogical.rex'], { timeout: 5000 });
+  } catch (err) {
+    log('could not focus the terminal pane:', err.message);
+  }
+}
+
 const NOT_CONNECTED =
   'The Zen/Firefox extension is not connected. Make sure the browser is running with the ' +
   '"Claude for Zen" extension loaded and enabled (check the toolbar icon).';
+
+// Unless told otherwise, agents work in a window of their own so they don't take over the user's tabs. Pages the user
+// points at stay in the user's window, so that is left to the agent to judge rather than forced.
+const WINDOW_INSTRUCTIONS = {
+  '1': 'All your calls use a browser window of your own. ',
+  '0': '',
+}[process.env.ZEN_CLAUDE_WINDOW] ??
+  'For work of your own, such as testing an app, research or filling in forms, call session_window first, so you ' +
+  'work in a window of your own and do not switch tabs in the window the user is looking at. Use the user\'s ' +
+  'window only when they point you at a page they have open, have marked something, or ask you to. ';
 
 const bridge = new Bridge();
 // Bind early so the extension can connect before the first tool call.
@@ -184,8 +251,9 @@ const server = new Server(
     instructions:
       'Tools for controlling the user\'s Zen/Firefox browser. Start with tabs_context to see open tabs. ' +
       'Prefer read_page/find + ref-based actions over coordinates; use screenshots to verify visual state. ' +
-      'Use form_input for native <select> elements. Call session_window to work in a window of your own, which lets ' +
-      'you drive the browser without switching tabs in the window the user is looking at. When the user refers to ' +
+      'Use form_input for native <select> elements. ' +
+      WINDOW_INSTRUCTIONS +
+      'When the user refers to ' +
       'something they boxed, marked or pointed at on the page, call get_marked_areas, and tick each mark off with ' +
       'resolve_marks once it is dealt with. Use highlight to point things out to the user.',
   },
