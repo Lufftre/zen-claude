@@ -72,6 +72,19 @@ Then either:
 - **Until restart:** `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → `extension/manifest.json`.
   (Without the experiments pref, Zen refuses to load it temporarily.)
 
+### Updates
+
+A permanent install keeps itself at the version on `main`. A new Claude session's first call compares the
+extension's build with the server's checkout; when the checkout is on `main` with `extension/` committed and differs,
+the server builds a package (into `$TMPDIR/zen-claude-builds/`) and the extension installs it through the experiment
+and reloads, which takes a second or two. Sessions keep their windows across the reload; marks and highlights on pages
+are lost. Sessions already running aren't affected until a new one starts. Pull `main` in the checkout the MCP server
+runs from to pick up changes.
+
+`ZEN_CLAUDE_AUTO_UPDATE=0` turns this off, and `ZEN_CLAUDE_AUTO_UPDATE=<branch>` follows another branch. Temporary
+loads aren't updated, and an extension that can't update itself (official Firefox, or versions before 0.1.7) gets a
+note in the session asking for `npm run ext:build` and a reinstall.
+
 **Official Firefox:** use `dist/claude-for-firefox.zip` (experiment stripped; page-level input only). Firefox release
 only installs signed add-ons, so sign it as unlisted:
 `npx web-ext sign --source-dir <unzipped dir> --channel unlisted --api-key … --api-secret …`.

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Claude for Zen",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Lets Claude Code control this browser through a local MCP server.",
   "browser_specific_settings": {
     "gecko": {

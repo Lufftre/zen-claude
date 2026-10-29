@@ -25,6 +25,13 @@
         "parameters": [{ "name": "windowId", "type": "integer" }]
       },
       {
+        "name": "installXpi",
+        "type": "function",
+        "async": true,
+        "description": "Replace this add-on with the package at an absolute path, which reloads it.",
+        "parameters": [{ "name": "path", "type": "string" }]
+      },
+      {
         "name": "status",
         "type": "function",
         "async": true,

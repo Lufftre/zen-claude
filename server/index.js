@@ -11,6 +11,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -226,6 +228,64 @@ async function focusTerminal() {
   }
 }
 
+// New sessions should get the extension as it is on main, so a session's first call updates it when this checkout,
+// on main with extension/ committed, has a different one. ZEN_CLAUDE_AUTO_UPDATE names another branch to follow,
+// or is 0 to turn this off. Sessions already running carry on with whatever the browser has.
+const ROOT = new URL('..', import.meta.url).pathname;
+const UPDATE_BRANCH = process.env.ZEN_CLAUDE_AUTO_UPDATE ?? 'main';
+const UPDATE_WAIT_MS = 20_000;
+
+async function currentTree() {
+  if (UPDATE_BRANCH === '0') return null;
+  const git = async (...args) => (await execFileP('git', ['-C', ROOT, ...args], { timeout: 5000 })).stdout.trim();
+  if ((await git('rev-parse', '--abbrev-ref', 'HEAD')) !== UPDATE_BRANCH) return null;
+  if (await git('status', '--porcelain', '--', 'extension')) return null;
+  return git('rev-parse', 'HEAD:extension');
+}
+
+// Returns a note for the session when the extension is out of date and could not be updated.
+async function updateExtension() {
+  const tree = await currentTree();
+  if (!tree) return null;
+  const manualUpdate = (version) => `The browser extension (${version}) is not the one in ${ROOT}, and can't update itself. ` +
+    'Ask the user to run `npm run ext:build` there and open dist/claude-for-zen.xpi in Zen.';
+  // Versions before 0.1.7 can't tell.
+  const info = await bridge.call('extension_info', {}).catch((err) => {
+    if (/Unknown method/.test(err.message)) return { version: 'an old version', build: {}, canUpdate: false };
+    throw err;
+  });
+  // A build of null is an unpacked extension (about:debugging, web-ext run), which the developer reloads.
+  if (!info.build || info.build.tree === tree) return null;
+  if (!info.canUpdate) return manualUpdate(info.version);
+  const xpi = join(tmpdir(), 'zen-claude-builds', `${tree}${PORT === 8765 ? '' : `-${PORT}`}.xpi`);
+  if (!existsSync(xpi)) {
+    await execFileP(process.execPath, [join(ROOT, 'scripts/build.mjs'), '--xpi', xpi, ...(PORT === 8765 ? [] : ['--port', String(PORT)])], { timeout: 60_000 });
+  }
+  log('updating the extension from', info.version, 'to', tree.slice(0, 8));
+  await bridge.call('self_update', { xpi });
+  // The extension reloads and reconnects; carry on once it reports the new build.
+  const deadline = Date.now() + UPDATE_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    const now = await bridge.call('extension_info', {}).catch(() => null);
+    if (now?.build?.tree === tree) return log('extension updated to', now.version), null;
+  }
+  return 'Updating the browser extension did not finish; it may still be running an older version.';
+}
+
+let updateNote = null;
+let updated = null;
+function updateOnce() {
+  updated ??= updateExtension()
+    .then((note) => { updateNote = note; })
+    .catch((err) => {
+      log('could not update the extension:', err.message);
+      // Try again once the browser is there.
+      if (err.message === NOT_CONNECTED) updated = null;
+    });
+  return updated;
+}
+
 const NOT_CONNECTED =
   'The Zen/Firefox extension is not connected. Make sure the browser is running with the ' +
   '"Claude for Zen" extension loaded and enabled (check the toolbar icon).';
@@ -269,8 +329,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     return { isError: true, content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
   }
   try {
-    const result = await bridge.call(name, args);
-    return toContent(result);
+    await updateOnce();
+    const result = toContent(await bridge.call(name, args));
+    if (updateNote) {
+      result.content.push({ type: 'text', text: updateNote });
+      updateNote = null;
+    }
+    return result;
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: err.message }] };
   }

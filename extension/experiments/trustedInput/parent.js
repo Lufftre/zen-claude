@@ -205,6 +205,22 @@ this.trustedInput = class extends ExtensionAPI {
           });
         },
 
+        // Replaces this add-on with the package at path, which reloads it. The caller doesn't get an answer, since
+        // the extension shuts down during the install.
+        async installXpi(path) {
+          const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
+          const self = await AddonManager.getAddonByID(context.extension.id);
+          if (self?.temporarilyInstalled) throw new ExtensionError("A temporarily loaded add-on is not updated.");
+          const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+          file.initWithPath(path);
+          if (!path.endsWith(".xpi") || !file.exists()) throw new ExtensionError(`No package at ${path}`);
+          const install = await AddonManager.getInstallForFile(file);
+          if (install.state === AddonManager.STATE_DOWNLOAD_FAILED || install.addon?.id !== context.extension.id) {
+            throw new ExtensionError(`${path} is not a package of this add-on.`);
+          }
+          install.install();
+        },
+
         async status() {
           try {
             eventUtils(Services.wm.getMostRecentWindow("navigator:browser"));

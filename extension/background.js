@@ -2,6 +2,8 @@
  * Keeps a WebSocket to the local MCP server and executes tool calls. */
 
 const VERSION = browser.runtime.getManifest().version;
+// Packages from scripts/build.mjs name the git tree they were built from; loading the source directory gives null.
+const BUILD = fetch(browser.runtime.getURL('build.json')).then((r) => r.json()).catch(() => null);
 const RECONNECT_MS = 2000;
 const BUSY_RECONNECT_MS = 10000;
 const MAX_NETWORK_ENTRIES = 500;
@@ -54,7 +56,8 @@ async function connect() {
     state.busy = false;
     updateBadge();
     const info = await browser.runtime.getBrowserInfo().catch(() => ({}));
-    ws.send(JSON.stringify({ type: 'hello', version: VERSION, browser: `${info.name || ''} ${info.version || ''}`.trim() }));
+    const build = await BUILD;
+    ws.send(JSON.stringify({ type: 'hello', version: VERSION, build, browser: `${info.name || ''} ${info.version || ''}`.trim() }));
   };
   ws.onmessage = (e) => onRequest(ws, e.data);
   ws.onclose = (e) => {
@@ -585,7 +588,54 @@ async function trustedAction(ti, tab, p) {
   return null; // not handled here (e.g. scroll_to)
 }
 
+// ---------------------------------------------------------------------------
+// Updates. A new session's MCP server checks the extension's build on its first call and, when its checkout has a
+// newer one, hands over a package to install. Sessions keep their windows across the reload that follows.
+
+const HANDOFF_MS = 60_000;
+let updating = false;
+
+async function selfUpdate({ xpi }) {
+  if (!browser.trustedInput?.installXpi) throw new Error('Updating needs the trustedInput experiment.');
+  if (updating) return { text: 'Already updating.' };
+  updating = true;
+  const handoff = { time: Date.now(), from: VERSION, sessions: [...sessions.values()].map(({ creating, ...s }) => s) };
+  await browser.storage.local.set({ handoff });
+  // Answer first: the install shuts this page down.
+  setTimeout(() => browser.trustedInput.installXpi(xpi).catch(async (err) => {
+    updating = false;
+    await browser.storage.local.remove('handoff');
+    state.activity.unshift({ time: Date.now(), method: 'update', summary: xpi, ok: false, error: err.message });
+  }), 100);
+  return { text: `Installing ${xpi}.` };
+}
+
+async function restoreHandoff() {
+  const { handoff } = await browser.storage.local.get('handoff');
+  if (!handoff) return;
+  await browser.storage.local.remove('handoff');
+  // Window ids are only meaningful in the browser run that saved them.
+  if (Date.now() - handoff.time > HANDOFF_MS) return;
+  const open = new Set((await browser.windows.getAll()).map((w) => w.id));
+  for (const s of handoff.sessions) {
+    if (sessions.has(s.id)) continue;
+    if (!open.has(s.windowId)) s.windowId = null;
+    sessions.set(s.id, s);
+    nameWindow(s);
+  }
+  state.activity.unshift({ time: Date.now(), method: 'update', summary: `${handoff.from} → ${VERSION}`, ok: true });
+}
+
+// Not tools: the MCP server calls these itself.
+const internalHandlers = {
+  async extension_info() {
+    return { version: VERSION, build: await BUILD, canUpdate: !!browser.trustedInput?.installXpi };
+  },
+  self_update: selfUpdate,
+};
+
 const handlers = {
+  ...internalHandlers,
   async session_window({ close, name }, sess) {
     if (!sess) throw new Error('This MCP server does not send a session id; update it.');
     if (close) {
@@ -897,7 +947,7 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
   }
 });
 
-loadSettings().then(() => {
+Promise.all([loadSettings(), restoreHandoff().catch(() => {})]).then(() => {
   updateBadge();
   connect();
 });
