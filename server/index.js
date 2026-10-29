@@ -9,9 +9,9 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,6 +21,16 @@ import { TOOLS } from './tools.js';
 const PORT = Number(process.env.ZEN_CLAUDE_PORT || 8765);
 const HOST = '127.0.0.1';
 const PEER_HEADER = 'x-zen-claude-peer';
+const CODE_HEADER = 'x-zen-claude-code';
+const STARTED_HEADER = 'x-zen-claude-started';
+// The hub decides what reaches the extension and the other sessions, so it should run the newest code. Servers compare
+// a fingerprint of their source; a hub that finds a server started after it with different code hands the port over.
+// ZEN_CLAUDE_CODE stands in for it in tests.
+const CODE = process.env.ZEN_CLAUDE_CODE || createHash('sha1')
+  .update(['index.js', 'tools.js'].map((f) => readFileSync(new URL(f, import.meta.url))).join('\0'))
+  .digest('hex');
+const STARTED = Date.now();
+const SUPERSEDED = 409;
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXTENSION_GRACE_MS = 5_000;
 // Identifies this Claude session to the extension, which keeps per-session state such as a dedicated window. The
@@ -50,18 +60,30 @@ class Bridge {
   ensure() {
     if (this.mode === 'hub') return Promise.resolve();
     if (this.mode === 'peer' && this.hubSocket?.readyState === WebSocket.OPEN) return Promise.resolve();
-    this.connecting ??= this.#becomeHub()
-      .catch((err) => {
-        if (err.code !== 'EADDRINUSE') throw err;
-        return this.#becomePeer();
-      })
-      .finally(() => { this.connecting = null; });
+    this.connecting ??= this.#join().finally(() => { this.connecting = null; });
     return this.connecting;
+  }
+
+  // An older hub turns us away once it has started giving up the port, so try again until it has.
+  async #join() {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#becomeHub();
+      } catch (err) {
+        if (err.code !== 'EADDRINUSE') throw err;
+      }
+      try {
+        return await this.#becomePeer();
+      } catch (err) {
+        if (!err.message.includes(String(SUPERSEDED)) || attempt >= 20) throw err;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
   }
 
   #becomeHub() {
     return new Promise((resolve, reject) => {
-      const wss = new WebSocketServer({ host: HOST, port: PORT });
+      const wss = new WebSocketServer({ host: HOST, port: PORT, verifyClient: (info, cb) => this.#verify(info, cb) });
       wss.once('error', reject);
       wss.once('listening', () => {
         wss.off('error', reject);
@@ -73,6 +95,39 @@ class Bridge {
         resolve();
       });
     });
+  }
+
+  // A server with newer code than ours takes over: turn it away while we close the port, and it retries as the hub.
+  #verify({ req }, cb) {
+    const code = req.headers[CODE_HEADER];
+    const newer = req.headers[PEER_HEADER] && code && code !== CODE && Number(req.headers[STARTED_HEADER]) > STARTED;
+    if (!newer) return cb(true);
+    cb(false, SUPERSEDED, 'a server with newer code is taking over');
+    this.#stepDown();
+  }
+
+  #stepDown() {
+    if (this.mode !== 'hub') return;
+    log('handing the hub over to a server with newer code');
+    const wss = this.wss;
+    this.wss = null;
+    this.mode = null;
+    this.extension = null;
+    this.relayed.clear();
+    this.peerSessions.clear();
+    for (const client of wss.clients) client.terminate();
+    wss.close();
+    this.#failPending('The zen-claude hub moved to a newer server; retry the request.');
+    // Rejoin as a peer, so the browser can reach this session again without waiting for its next tool call.
+    setTimeout(() => this.ensure().catch((err) => log('rejoining:', err.message)), 1000);
+  }
+
+  #failPending(message) {
+    for (const [id, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error(message));
+      this.pending.delete(id);
+    }
   }
 
   #onHubConnection(ws, req) {
@@ -123,6 +178,7 @@ class Bridge {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
     if (msg.session?.id) this.peerSessions.set(msg.session.id, peer);
+    if (msg.type === 'hello') return;
     if (!this.extension || this.extension.readyState !== WebSocket.OPEN) {
       peer.send(JSON.stringify({ id: msg.id, error: NOT_CONNECTED }));
       return;
@@ -134,11 +190,14 @@ class Bridge {
 
   #becomePeer() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://${HOST}:${PORT}`, { headers: { [PEER_HEADER]: '1' } });
+      const headers = { [PEER_HEADER]: '1', [CODE_HEADER]: CODE, [STARTED_HEADER]: String(STARTED) };
+      const ws = new WebSocket(`ws://${HOST}:${PORT}`, { headers });
       ws.once('open', () => {
         this.hubSocket = ws;
         this.mode = 'peer';
         log('connected to existing hub as peer');
+        // Let the hub know this session is here, so it can pass on "Show terminal" before our first request.
+        ws.send(JSON.stringify({ type: 'hello', session: SESSION }));
         resolve();
       });
       ws.once('error', reject);
@@ -152,11 +211,9 @@ class Bridge {
         if (this.hubSocket !== ws) return;
         this.hubSocket = null;
         this.mode = null;
-        for (const [id, p] of this.pending) {
-          clearTimeout(p.timer);
-          p.reject(new Error('Lost connection to the zen-claude hub; retry the request.'));
-          this.pending.delete(id);
-        }
+        this.#failPending('Lost connection to the zen-claude hub; retry the request.');
+        // The hub may have gone to a newer server; rejoin so the browser can still reach this session.
+        setTimeout(() => this.ensure().catch((err) => log('rejoining:', err.message)), 1000);
       });
     });
   }

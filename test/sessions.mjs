@@ -41,7 +41,7 @@ await new Promise((r) => extension.once('open', r));
 const seen = [];
 extension.on('message', (data) => {
   const msg = JSON.parse(data);
-  seen.push(msg.session);
+  if (msg.method === 'tabs_context') seen.push(msg.session); // not the extension_info each session starts with
   extension.send(JSON.stringify({ id: msg.id, result: { text: 'ok' } }));
 });
 
@@ -63,6 +63,30 @@ for (const sess of [peer2Sess, hubSess, peerSess, { id: 'unknown' }]) {
 await new Promise((r) => setTimeout(r, 1000));
 assert.deepEqual(focusLog().sort(), ['block:hub block focus block:hub', 'block:peer block focus block:peer']);
 
+// A server with newer code takes the hub over; the extension reconnects to it, and "Show terminal" reaches sessions
+// started before it, the old hub included, without them making another call.
+let extension2;
+extension.once('close', async () => {
+  for (let i = 0; i < 40 && extension2?.readyState !== WebSocket.OPEN; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    extension2 = new WebSocket(`ws://127.0.0.1:${PORT}`, { origin: 'moz-extension://test' });
+    extension2.on('message', (data) => {
+      const msg = JSON.parse(data);
+      extension2.send(JSON.stringify({ id: msg.id, result: { text: 'ok' } }));
+    });
+    await new Promise((r) => { extension2.once('open', r); extension2.once('error', r); });
+  }
+});
+const newer = await start({ REX_BLOCK: 'block:newer', ZEN_CLAUDE_CODE: 'newer' });
+const r = await newer.callTool({ name: 'tabs_context', arguments: {} });
+assert.equal(r.isError, undefined, r.content[0].text);
+assert.equal(extension2.readyState, WebSocket.OPEN);
+await new Promise((r) => setTimeout(r, 1500)); // the old hub rejoins as a peer
+writeFileSync(logFile, '');
+for (const sess of [hubSess, peer2Sess]) extension2.send(JSON.stringify({ type: 'focusTerminal', session: sess.id }));
+await new Promise((r) => setTimeout(r, 1000));
+assert.deepEqual(focusLog().sort(), ['block:hub block focus block:hub', 'block:peer block focus block:peer']);
+
 console.log('ok: labels', seen.map((s) => s.label), '\nfocus requests:', focusLog());
-extension.close();
-await Promise.all([hub, peer, peer2].map((c) => c.close()));
+extension2.close();
+await Promise.all([hub, peer, peer2, newer].map((c) => c.close()));
