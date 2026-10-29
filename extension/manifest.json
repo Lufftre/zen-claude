@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Claude for Zen",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Lets Claude Code control this browser through a local MCP server.",
   "browser_specific_settings": {
     "gecko": {
@@ -46,6 +46,14 @@
     "default_title": "Claude for Zen",
     "default_popup": "popup.html",
     "default_icon": "icons/icon.svg"
+  },
+  "commands": {
+    "mark-area": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Mark an element or area of the page to show Claude"
+    }
   },
   "experiment_apis": {
     "trustedInput": {

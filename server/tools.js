@@ -208,6 +208,68 @@ export const TOOLS = [
     },
   },
   {
+    name: 'get_marked_areas',
+    description:
+      'Get what the user marked on a page to show you something (after Alt+Shift+A or the toolbar popup they click ' +
+      'an element or drag a box). Each open mark has an id and the user\'s note, if any. An element mark gives the ' +
+      'element with its ref, where it sits and what it contains; a box mark gives its position, the elements inside ' +
+      'it with refs, its text and a cropped screenshot. Also returns any selected text. Without tabId, reads the tab ' +
+      'the user marked something in most recently. Call this when the user says "this", "here", "the marked ' +
+      'things" or similar about the page, and tick marks off with resolve_marks as you deal with them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'Tab to read. Defaults to the tab with the most recent mark.' },
+        clear: { type: 'boolean', description: 'Remove all marks from the page after reading them.' },
+        images: {
+          type: 'boolean',
+          description: 'Cropped screenshots: true for every mark, false for none. Default: box marks only.',
+        },
+      },
+    },
+  },
+  {
+    name: 'resolve_marks',
+    description:
+      'Tick off marks from get_marked_areas once you have dealt with them, so the user sees your progress on the ' +
+      'page (they turn green with a check). Ticked-off marks are left out of later get_marked_areas results. ' +
+      'Without ids, ticks off every open mark.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'number' }, description: 'Mark ids to tick off.' },
+        remove: { type: 'boolean', description: 'Remove the marks from the page instead of ticking them off.' },
+        tabId: { type: 'number', description: 'Tab with the marks. Defaults to the tab with the most recent mark.' },
+      },
+    },
+  },
+  {
+    name: 'highlight',
+    description:
+      'Draw labelled boxes on the page to point something out to the user, e.g. "this button" or several problem ' +
+      'spots. Each item is a ref (the box follows the element) or a viewport region [x0, y0, x1, y1] in screenshot ' +
+      'pixels. Replaces your previous highlights; call with no items to clear them. The first item is scrolled into ' +
+      'view. Highlights show up in screenshots.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              ref,
+              region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 },
+              label: { type: 'string', description: 'Short text shown on the box.' },
+            },
+          },
+        },
+        duration: { type: 'number', description: 'Remove after this many seconds. Default: stay until replaced or cleared.' },
+        tabId,
+      },
+    },
+  },
+  {
     name: 'resize_window',
     description: 'Resize the browser window containing the tab.',
     inputSchema: {

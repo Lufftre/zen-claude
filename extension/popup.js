@@ -42,6 +42,14 @@ $('port').addEventListener('change', async (e) => {
   await browser.runtime.sendMessage({ type: 'setPort', port: e.target.value });
   refresh();
 });
+$('mark').addEventListener('click', async () => {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  await browser.runtime.sendMessage({ type: 'startMarking', tabId: tab.id }).catch(() => {});
+  window.close();
+});
+browser.commands.getAll().then((cmds) => {
+  $('markKey').textContent = cmds.find((c) => c.name === 'mark-area')?.shortcut || '';
+});
 
 refresh();
 setInterval(refresh, 1000);

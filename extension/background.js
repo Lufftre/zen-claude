@@ -112,7 +112,7 @@ async function onRequest(ws, data) {
   try {
     const handler = handlers[method];
     if (!handler) throw new Error(`Unknown method: ${method}`);
-    reply = { id, result: await handler(params, sessionFor(session)) };
+    reply = { id, result: withMarksNotice(method, await handler(params, sessionFor(session))) };
     entry.ok = true;
   } catch (err) {
     reply = { id, error: err?.message || String(err) };
@@ -296,6 +296,53 @@ function exclusive(fn) {
   exclusiveQueue = run.catch(() => {});
   return run;
 }
+
+// ---------------------------------------------------------------------------
+// Elements and areas the user marked for Claude. The content script owns them; this tracks which tabs have any, so
+// get_marked_areas can find them without a tabId and other tool results can mention new ones.
+
+const marked = new Map(); // tabId -> { open, total, time }
+let marksUnseen = false;
+
+function setMarks(tabId, open = 0, total = open) {
+  if (total > 0) {
+    const prev = marked.get(tabId);
+    const added = open > (prev?.open ?? 0);
+    if (added) marksUnseen = true;
+    marked.set(tabId, { open, total, time: added || !prev ? Date.now() : prev.time });
+  } else {
+    marked.delete(tabId);
+  }
+  if (![...marked.values()].some((m) => m.open)) marksUnseen = false;
+}
+
+// The tab the user marked something in most recently, preferring ones with open marks.
+function markedTab() {
+  const byTime = [...marked].sort((a, b) => b[1].time - a[1].time);
+  return (byTime.find(([, m]) => m.open) || byTime[0])?.[0];
+}
+
+const openMarks = (except) => [...marked].filter(([id, m]) => m.open && id !== except).map(([id, m]) => `tab ${id} (${m.open})`);
+
+browser.tabs.onRemoved.addListener((tabId) => setMarks(tabId, 0));
+browser.webNavigation.onCommitted.addListener((d) => { if (d.frameId === 0) setMarks(d.tabId, 0); });
+
+// Claude can't be told about a new mark directly, so mention it in the next tool result.
+function withMarksNotice(method, result) {
+  if (!marksUnseen || method === 'get_marked_areas' || !result || typeof result !== 'object') return result;
+  marksUnseen = false;
+  const note = `[The user has marked something on a page for you: ${openMarks().join(', ')}. Call get_marked_areas to see it.]`;
+  return { ...result, text: result.text != null ? `${result.text}\n\n${note}` : note };
+}
+
+async function startMarking(tabId) {
+  const [tab] = tabId != null ? [await browser.tabs.get(tabId)] : await browser.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab) await sendToContent(tab.id, { type: 'startMarking' });
+}
+
+browser.commands.onCommand.addListener((command) => {
+  if (command === 'mark-area') startMarking().catch(() => {});
+});
 
 // ---------------------------------------------------------------------------
 // Network log (per tab, reset on top-level navigation)
@@ -688,6 +735,84 @@ const handlers = {
     return { text: layout === 'unsplit' ? 'Split view closed.' : `Tabs ${tabIds.join(', ')} are now split (${layout}).` };
   },
 
+  async get_marked_areas({ tabId, clear, images }) {
+    tabId ??= markedTab();
+    if (tabId == null) {
+      return { text: 'The user has not marked anything. They can press Alt+Shift+A (or use the toolbar popup), then click an element or drag a box.' };
+    }
+    const tab = await browser.tabs.get(tabId);
+    const info = await sendToContent(tab.id, { type: 'readMarks' });
+    const lines = [`Tab ${tab.id}: ${tab.title}`, tab.url, `Viewport ${info.viewport.width}x${info.viewport.height}, scrolled to (${info.viewport.scrollX}, ${info.viewport.scrollY}).`];
+    if (info.selection) lines.push('', `Selected text: "${info.selection}"`);
+    const open = info.marks.filter((m) => !m.done);
+    const done = info.marks.filter((m) => m.done);
+    if (!open.length) lines.push('', done.length ? 'No open marks on this tab.' : 'Nothing marked on this tab.');
+    const shots = [];
+    for (const m of open) {
+      const note = m.note ? [`  Note: "${m.note}"`] : [];
+      if (m.kind === 'element') {
+        if (m.lost) {
+          lines.push('', `Mark ${m.id}: ${m.lost}, no longer on the page.`, ...note);
+          continue;
+        }
+        lines.push('', `Mark ${m.id}: ${m.element} at (${m.center.join(', ')})${m.visible ? '' : ', off screen'}`, ...note);
+        if (m.context) lines.push(`  Inside ${m.context}`);
+        if (m.elements.length) lines.push('  Contains:', ...m.elements.map((l) => `    ${l}`));
+        if (m.text) lines.push(`  Text: "${m.text}"`);
+        if (images === true && m.visible) shots.push(m);
+        continue;
+      }
+      lines.push('', `Mark ${m.id} (box): viewport [${m.viewport.join(', ')}], page [${m.page.join(', ')}]`, ...note);
+      if (!m.visible) {
+        lines.push('  Scrolled out of view; scroll to it to see its contents.');
+        continue;
+      }
+      lines.push(`  Inside ${m.container}`);
+      if (m.elements.length) lines.push('  Elements:', ...m.elements.map((l) => `    ${l}`));
+      if (m.text) lines.push(`  Text: "${m.text}"`);
+      if (images !== false) shots.push(m);
+    }
+    if (done.length) lines.push('', `Already ticked off: ${done.map((m) => m.id).join(', ')}.`);
+    if (open.length) lines.push('', 'Call resolve_marks with the ids you deal with, so the user sees them ticked off.');
+    const others = openMarks(tab.id);
+    if (others.length) lines.push('', `Other tabs with marks: ${others.join(', ')}.`);
+
+    const result = { text: lines.join('\n'), images: [] };
+    if (shots.length) {
+      const vp = await viewportInfo(tab.id);
+      await sendToContent(tab.id, { type: 'overlayHidden', hidden: true });
+      try {
+        for (const m of shots) {
+          const [x0, y0, x1, y1] = m.visible;
+          // Sharper crops for small areas, capped so big ones stay a sensible size.
+          const scale = (x1 - x0) * (y1 - y0) > 600 * 400 ? 1 : Math.max(1, vp?.dpr || 1);
+          result.images.push(await capture(tab, { rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, scale }));
+        }
+      } finally {
+        await sendToContent(tab.id, { type: 'overlayHidden', hidden: false }).catch(() => {});
+      }
+      result.text += `\n\nImages: mark ${shots.map((m) => m.id).join(', ')}, in order (the visible part of each).`;
+    }
+    if (clear) {
+      await sendToContent(tab.id, { type: 'readMarks', clear: true });
+      result.text += '\nThe marks were removed from the page.';
+    }
+    return result;
+  },
+
+  async resolve_marks({ tabId, ids, remove }) {
+    tabId ??= markedTab();
+    if (tabId == null) return { text: 'There are no marks on any page.' };
+    return { text: await sendToContent(tabId, { type: 'resolveMarks', ids, remove }) };
+  },
+
+  async highlight({ tabId, items = [], duration }, sess) {
+    const tab = await resolveTab(tabId, sess);
+    let text = await sendToContent(tab.id, { type: 'highlight', items, duration });
+    if (items.length && !tab.active) text += ` Tab ${tab.id} is not the active tab in its window, so the user won't see it until it is (tabs_activate).`;
+    return { text };
+  },
+
   async resize_window({ tabId, width, height }, sess) {
     const tab = await resolveTab(tabId, sess);
     const win = await browser.windows.update(tab.windowId, { width: Math.round(width), height: Math.round(height), state: 'normal' });
@@ -699,7 +824,11 @@ const handlers = {
 // Popup API
 
 browser.runtime.onMessage.addListener(async (msg, sender) => {
-  if (sender.tab) return; // only the popup
+  if (sender.tab) {
+    if (msg.type === 'marksChanged') setMarks(sender.tab.id, msg.open, msg.total);
+    return;
+  }
+  if (msg.type === 'startMarking') return startMarking(msg.tabId);
   if (msg.type === 'getState') {
     await checkTrustedAvailable();
     return {

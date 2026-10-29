@@ -21,6 +21,8 @@
   .note { color: var(--muted); font-size: 11px; }
   .empty { color: var(--muted); font-family: inherit; }
   .hint { color: var(--muted); font-size: 12px; padding: 0 14px 10px; }
+  button { font: inherit; background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  kbd { font: 11px ui-monospace, monospace; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -36,6 +38,10 @@
   <div class="row">
     <span>MCP server port</span>
     <input type="number" id="port" min="1" max="65535">
+  </div>
+  <div class="row">
+    <span>Show Claude something <kbd id="markKey"></kbd></span>
+    <button id="mark">Mark something</button>
   </div>
   <p id="hint" class="hint" hidden>Start a Claude Code session with the <code>zen-browser</code> MCP server configured; the extension connects automatically.</p>
   <h2>Recent activity</h2>

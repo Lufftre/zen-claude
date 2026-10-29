@@ -92,10 +92,35 @@ log of recent tool calls.
 | `javascript_tool` | Run JS in the page (content-script context; `window.wrappedJSObject` for page globals) |
 | `read_console_messages` | Captured console output and uncaught errors |
 | `read_network_requests` | Requests since the last top-level navigation |
+| `get_marked_areas` | What you marked on the page: elements (with refs) or boxed areas, your notes, and crops of boxes |
+| `resolve_marks` | Tick marks off (or remove them) as Claude deals with them |
+| `highlight` | Draw labelled boxes around refs or regions to point something out to you |
 | `resize_window` | Resize the window |
 
 Screenshots are captured at one image pixel per CSS pixel, so screenshot coordinates can be passed straight to
 `computer`.
+
+## Pointing at things
+
+**You → Claude:** press <kbd>Alt+Shift+A</kbd> (or *Mark something* in the popup), then either:
+
+- **click an element.** The element under the pointer is outlined; <kbd>↑</kbd>/<kbd>↓</kbd> pick its parent or go
+  back down. The mark follows the element as the page scrolls, reflows or re-renders it. Claude gets the element's
+  ref, what it contains and where it sits, which is precise and costs few tokens.
+- **drag a box** for things that aren't a single element (spacing, a gap, a region). Claude gets the elements and
+  text inside it plus a cropped screenshot.
+
+After each mark a note field opens on its label (Enter to save, Esc to skip); click the label later to edit it. Hold
+<kbd>Shift</kbd> while clicking or dragging to mark several things in one go, and Esc to stop. A mark stays until you
+remove it with its ×, the page navigates, or Claude clears it. Then say e.g. "fix the marked things":
+`get_marked_areas` returns each open mark with its note, plus any text you've selected, and as Claude deals with
+each one it calls `resolve_marks`, which turns it green with a check. Without a `tabId` both use the tab you marked
+something in most recently, and the next tool result after you add a mark mentions it, so Claude notices even if
+you don't say so. Change the shortcut in *about:addons → ⚙ → Manage Extension Shortcuts*.
+
+**Claude → you:** `highlight` draws orange boxes with labels around elements (they follow the element as the page
+scrolls or reflows) or screenshot regions. Each call replaces the previous highlights, and no items clears them.
+They appear in Claude's screenshots too.
 
 ## Trusted input
 

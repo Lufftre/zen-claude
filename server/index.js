@@ -185,7 +185,9 @@ const server = new Server(
       'Tools for controlling the user\'s Zen/Firefox browser. Start with tabs_context to see open tabs. ' +
       'Prefer read_page/find + ref-based actions over coordinates; use screenshots to verify visual state. ' +
       'Use form_input for native <select> elements. Call session_window to work in a window of your own, which lets ' +
-      'you drive the browser without switching tabs in the window the user is looking at.',
+      'you drive the browser without switching tabs in the window the user is looking at. When the user refers to ' +
+      'something they boxed, marked or pointed at on the page, call get_marked_areas, and tick each mark off with ' +
+      'resolve_marks once it is dealt with. Use highlight to point things out to the user.',
   },
 );
 
@@ -206,10 +208,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 
-// The extension returns { text?, image?: { data, mimeType } }.
+// The extension returns { text?, image?: { data, mimeType }, images?: [...] }.
 function toContent(result) {
   const content = [];
-  if (result?.image) content.push({ type: 'image', data: result.image.data, mimeType: result.image.mimeType });
+  for (const image of [result?.image, ...(result?.images || [])].filter(Boolean)) {
+    content.push({ type: 'image', data: image.data, mimeType: image.mimeType });
+  }
   if (result?.text != null) content.push({ type: 'text', text: String(result.text) });
   if (!content.length) content.push({ type: 'text', text: result === undefined ? 'OK' : JSON.stringify(result, null, 2) });
   return { content };
