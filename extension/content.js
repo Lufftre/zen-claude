@@ -927,9 +927,9 @@ if (!window.__zenClaudeLoaded) {
     following = 0;
     let any = false;
     for (const h of highlights) {
-      if (!h.el) continue;
+      if (!h.els) continue;
       any = true;
-      track(h.node, h.el);
+      trackAll(h.node, h.els);
     }
     for (const m of marks) {
       if (!m.el) continue;
@@ -941,10 +941,28 @@ if (!window.__zenClaudeLoaded) {
   }
 
   function track(node, el) {
-    const r = el.isConnected ? topRect(el) : null;
-    const shown = !!r && (r.width > 0 || r.height > 0);
-    node.style.display = shown ? '' : 'none';
-    if (shown) placeBox(node, pad(r));
+    trackAll(node, [el]);
+  }
+
+  // One box around all the elements still shown, e.g. a column's header and last cell.
+  function trackAll(node, els) {
+    const r = unionRect(els);
+    node.style.display = r ? '' : 'none';
+    if (r) placeBox(node, pad(r));
+  }
+
+  function unionRect(els) {
+    let u = null;
+    for (const el of els) {
+      const r = el.isConnected ? topRect(el) : null;
+      if (!r || (r.width <= 0 && r.height <= 0)) continue;
+      const right = Math.max(r.left + r.width, u ? u.left + u.width : -Infinity);
+      const bottom = Math.max(r.top + r.height, u ? u.top + u.height : -Infinity);
+      const left = Math.min(r.left, u ? u.left : Infinity);
+      const top = Math.min(r.top, u ? u.top : Infinity);
+      u = { left, top, width: right - left, height: bottom - top };
+    }
+    return u;
   }
 
   // Up one level, crossing shadow roots and same-origin iframes.
@@ -1354,8 +1372,9 @@ if (!window.__zenClaudeLoaded) {
 
   // --- Highlights (Claude boxes something for the user) ---------------------
 
-  let highlights = []; // { node, el? }
+  let highlights = []; // { node, els? } — boxes without els are regions
   let highlightTimer = null;
+  let regionsDrawnAt = 0;
 
   function clearHighlights() {
     for (const h of highlights) h.node.remove();
@@ -1363,28 +1382,42 @@ if (!window.__zenClaudeLoaded) {
     clearTimeout(highlightTimer);
   }
 
+  // A region is pixels from a screenshot, with nothing to say what it pointed at, so once the layout moves under it
+  // (a resize, or scrolling inside a container rather than the page) it's taken down instead of left over the wrong
+  // content. Boxes around elements follow them instead.
+  function dropRegions() {
+    if (Date.now() - regionsDrawnAt < 1000) return; // our own scrolling right after drawing
+    highlights = highlights.filter((h) => h.els || (h.node.remove(), false));
+  }
+  addEventListener('resize', dropRegions);
+  addEventListener('scroll', (e) => {
+    if (e.target !== document && e.target !== document.documentElement) dropRegions();
+  }, { capture: true, passive: true });
+
   function highlight({ items = [], duration }) {
     // Resolve everything first so a bad ref doesn't leave a partial set on screen.
     const resolved = items.map((item, i) => {
-      if (item.ref) return { ...item, el: resolveRef(item.ref) };
+      const ids = [...(item.ref ? [item.ref] : []), ...(item.refs || [])];
+      if (ids.length) return { ...item, els: ids.map(resolveRef) };
       if (item.region?.length === 4) return { ...item, rect: toRect(item.region) };
-      throw new Error(`Highlight ${i + 1} needs a ref or a region [x0, y0, x1, y1].`);
+      throw new Error(`Highlight ${i + 1} needs a ref, refs or a region [x0, y0, x1, y1].`);
     });
     clearHighlights();
     if (!resolved.length) return 'Cleared highlights.';
     for (const item of resolved) {
       const node = boxNode('hl', item.label);
       overlay().append(node);
-      placeBox(node, item.el ? paddedRect(item.el) : item.rect);
-      highlights.push({ node, el: item.el });
+      placeBox(node, item.els ? pad(unionRect(item.els) || topRect(item.els[0])) : item.rect);
+      highlights.push({ node, els: item.els });
     }
     // Bring the first one into view if it's off screen.
     const first = highlights[0].node.getBoundingClientRect();
     if (first.bottom < 0 || first.top > innerHeight || first.right < 0 || first.left > innerWidth) {
-      if (resolved[0].el) resolved[0].el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (resolved[0].els) resolved[0].els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
       else scrollTo({ top: first.top + scrollY - innerHeight / 3, behavior: 'smooth' });
     }
-    if (highlights.some((h) => h.el)) follow();
+    if (highlights.some((h) => !h.els)) regionsDrawnAt = Date.now();
+    if (highlights.some((h) => h.els)) follow();
     if (duration > 0) highlightTimer = setTimeout(clearHighlights, duration * 1000);
     return `Highlighted ${resolved.length} item(s)${duration > 0 ? ` for ${duration}s` : ' until cleared or replaced'}.`;
   }
