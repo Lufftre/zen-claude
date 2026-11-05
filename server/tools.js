@@ -254,8 +254,11 @@ export const TOOLS = [
     name: 'highlight',
     description:
       'Draw labelled boxes on the page to point something out to the user, e.g. "this button" or several problem ' +
-      'spots. Each item is a ref (the box follows the element) or a viewport region [x0, y0, x1, y1] in screenshot ' +
-      'pixels. Replaces your previous highlights; call with no items to clear them. The first item is scrolled into ' +
+      'spots. Each item is a ref, or refs to box several elements together (e.g. a table column\'s header and last ' +
+      'cell); these boxes follow the elements through scrolling, resizing and layout changes. Use a viewport region ' +
+      '[x0, y0, x1, y1] in screenshot pixels only when there is no element to point at, such as content inside a ' +
+      'cross-origin iframe: it stays where it was drawn, and is removed when the window is resized or a container ' +
+      'scrolls. Replaces your previous highlights; call with no items to clear them. The first item is scrolled into ' +
       'view. Highlights show up in screenshots.',
     inputSchema: {
       type: 'object',
@@ -266,6 +269,7 @@ export const TOOLS = [
             type: 'object',
             properties: {
               ref,
+              refs: { type: 'array', items: { type: 'string' }, description: 'Several element refs; one box around them all.' },
               region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 },
               label: { type: 'string', description: 'Short text shown on the box.' },
             },
