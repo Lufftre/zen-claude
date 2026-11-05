@@ -48,6 +48,29 @@ minimized. `session_window` with `close: true` closes it and goes back to sharin
 - Input into a session window makes it Gecko's active window; afterwards focus is handed back to the window that had
   it, so keys you type in your window stay there.
 
+## Sessions on another machine
+
+Claude sessions on another machine, such as a VPS you SSH into, can use the browser through an SSH tunnel. Run this
+on the browser's machine for as long as they need it:
+
+```sh
+scripts/remote-tunnel.sh ludde@rex
+```
+
+On the other machine, check out this repo, run `npm install`, and add the server with the socket the tunnel makes:
+
+```sh
+claude mcp add --scope user zen-browser -e ZEN_CLAUDE_HUB_SOCKET="$HOME/.zen-claude/hub.sock" -- node "$PWD/server/index.js"
+```
+
+- The tunnel forwards the hub's port to a Unix socket in `~/.zen-claude/` (mode 700) on the other machine, not to a
+  port there. A forwarded TCP port would let every account on that machine drive the browser; the socket only lets
+  yours. Anything running as you there still can, so stop the tunnel when you're done.
+- The traffic goes over SSH, and over Tailscale too when the host is a tailnet address.
+- A Claude session using zen-browser has to be running on the browser's machine, since that's what runs the hub.
+- Servers with `ZEN_CLAUDE_HUB_SOCKET` only join the hub as peers. They never take the port over, however new their
+  code, and they don't update the extension.
+
 ## Setup
 
 ```sh

@@ -30,6 +30,13 @@ const CODE = process.env.ZEN_CLAUDE_CODE || createHash('sha1')
   .update(['index.js', 'tools.js'].map((f) => readFileSync(new URL(f, import.meta.url))).join('\0'))
   .digest('hex');
 const STARTED = Date.now();
+// A server on another machine reaches the hub through a Unix socket that SSH forwards to the browser's machine
+// (`ssh -R <socket>:127.0.0.1:8765`). sshd creates it readable by our user only, so other accounts on this machine
+// can't drive the browser, as they could through a forwarded TCP port. Such a server can only ever be a peer: it
+// can't take the port over, since the browser can't reach it, and it can't hand the extension an .xpi on its disk.
+const HUB_SOCKET = process.env.ZEN_CLAUDE_HUB_SOCKET || '';
+const REMOTE = !!HUB_SOCKET;
+const HUB_URL = REMOTE ? `ws+unix:${HUB_SOCKET}:/` : `ws://${HOST}:${PORT}`;
 const SUPERSEDED = 409;
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXTENSION_GRACE_MS = 5_000;
@@ -67,6 +74,13 @@ class Bridge {
   // An older hub turns us away once it has started giving up the port, so try again until it has.
   async #join() {
     for (let attempt = 0; ; attempt++) {
+      if (REMOTE) {
+        return await this.#becomePeer().catch((err) => {
+          throw new Error(`Can't reach the zen-claude hub through ${HUB_SOCKET} (${err.message}). It is forwarded ` +
+            'from the machine with the browser, which needs the tunnel running (scripts/remote-tunnel.sh) and a ' +
+            'Claude session using zen-browser.');
+        });
+      }
       try {
         return await this.#becomeHub();
       } catch (err) {
@@ -190,8 +204,9 @@ class Bridge {
 
   #becomePeer() {
     return new Promise((resolve, reject) => {
-      const headers = { [PEER_HEADER]: '1', [CODE_HEADER]: CODE, [STARTED_HEADER]: String(STARTED) };
-      const ws = new WebSocket(`ws://${HOST}:${PORT}`, { headers });
+      // Without the code header, the hub never hands the port over to a remote server.
+      const headers = { [PEER_HEADER]: '1', ...(!REMOTE && { [CODE_HEADER]: CODE }), [STARTED_HEADER]: String(STARTED) };
+      const ws = new WebSocket(HUB_URL, { headers });
       ws.once('open', () => {
         this.hubSocket = ws;
         this.mode = 'peer';
@@ -293,7 +308,7 @@ const UPDATE_BRANCH = process.env.ZEN_CLAUDE_AUTO_UPDATE ?? 'main';
 const UPDATE_WAIT_MS = 20_000;
 
 async function currentTree() {
-  if (UPDATE_BRANCH === '0') return null;
+  if (UPDATE_BRANCH === '0' || REMOTE) return null;
   const git = async (...args) => (await execFileP('git', ['-C', ROOT, ...args], { timeout: 5000 })).stdout.trim();
   if ((await git('rev-parse', '--abbrev-ref', 'HEAD')) !== UPDATE_BRANCH) return null;
   if (await git('status', '--porcelain', '--', 'extension')) return null;
