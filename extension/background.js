@@ -396,6 +396,21 @@ function netEntry(details) {
   return list;
 }
 
+// Links from the Claude Code mod (zen-window) under a session's prompt: http://zen-claude.localhost/window/<id>
+// opens here, as Zen is the default browser. The tab goes at once and that session's window comes to the front.
+// Only windows sessions own; any other id just closes the tab.
+browser.webNavigation.onBeforeNavigate.addListener(async (d) => {
+  if (d.frameId !== 0) return;
+  const m = /^https?:\/\/zen-claude\.localhost\/window\/(\d+)\/?$/.exec(d.url);
+  if (!m) return;
+  const windowId = Number(m[1]);
+  await browser.tabs.remove(d.tabId).catch(() => {});
+  if (![...sessions.values()].some((s) => s.own && s.windowId === windowId)) return;
+  const { state } = await browser.windows.get(windowId).catch(() => ({}));
+  if (state === undefined) return;
+  await browser.windows.update(windowId, { focused: true, ...(state === 'minimized' ? { state: 'normal' } : {}) });
+}, { url: [{ hostEquals: 'zen-claude.localhost' }] });
+
 const pendingRequests = new Map(); // requestId -> entry
 
 browser.webRequest.onBeforeRequest.addListener((d) => {
