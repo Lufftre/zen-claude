@@ -1,0 +1,6 @@
+{
+  "name": "zen-window",
+  "version": "0.1.0",
+  "description": "A link under the prompt to this session's own Zen window (zen-claude); click to bring it to the front",
+  "types": "./types/index.d.ts"
+}
