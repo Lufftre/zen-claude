@@ -93,9 +93,78 @@ function setWindowLabel(win, text, tooltip, onClick) {
   label.title = tooltip || "";
 }
 
+// Links opened from other apps go to the most recently activated browser window, and a session's window is often
+// that one: it was just opened, it took Gecko focus for input while another app was in front, or the user looked at
+// it. Such a link is the user's, so a session's window passes it on to the window the user last used instead.
+const linksKeptOut = new WeakMap(); // session window -> the browserDOMWindow it had
+
+function userWindowFor(sessionWin) {
+  const { BrowserWindowTracker } = ChromeUtils.importESModule("resource:///modules/BrowserWindowTracker.sys.mjs");
+  const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
+  const isPrivate = PrivateBrowsingUtils.isWindowPrivate(sessionWin);
+  // Most recently activated first, minimized ones last.
+  return BrowserWindowTracker.orderedWindows.find(
+    w =>
+      !w.closed &&
+      !linksKeptOut.has(w) &&
+      w.browserDOMWindow &&
+      w.toolbar.visible &&
+      !w.document.documentElement.hasAttribute("mini-window") &&
+      PrivateBrowsingUtils.isWindowPrivate(w) === isPrivate
+  );
+}
+
+function keepExternalLinksOut(win) {
+  // Every route for a link from outside ends in the window's browserDOMWindow.openURI with OPEN_EXTERNAL set.
+  // win.browserDOMWindow gives an XPCOM wrapper, so the method can't be patched in place; the window gets a stand-in
+  // that passes everything else through.
+  const original = win.browserDOMWindow;
+  if (!original || linksKeptOut.has(win)) return;
+  win.browserDOMWindow = {
+    QueryInterface: ChromeUtils.generateQI(["nsIBrowserDOMWindow"]),
+    openURI(uri, openWindowInfo, where, flags, triggeringPrincipal, policyContainer) {
+      if (flags & Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL) {
+        try {
+          const target = userWindowFor(win);
+          if (target) {
+            return target.browserDOMWindow.openURI(uri, openWindowInfo, where, flags, triggeringPrincipal, policyContainer);
+          }
+          if (uri) {
+            // The user has no window open: give them a new one rather than the session's.
+            win.openLinkIn(uri.spec, "window", { triggeringPrincipal, fromExternal: true });
+            return null;
+          }
+        } catch (e) {
+          console.error("Claude for Zen: could not pass an external link on to the user's window", e);
+        }
+      }
+      return original.openURI(uri, openWindowInfo, where, flags, triggeringPrincipal, policyContainer);
+    },
+    createContentWindow: (...args) => original.createContentWindow(...args),
+    createContentWindowInFrame: (...args) => original.createContentWindowInFrame(...args),
+    openURIInFrame: (...args) => original.openURIInFrame(...args),
+    canClose: () => original.canClose(),
+    get tabCount() {
+      return original.tabCount;
+    },
+  };
+  linksKeptOut.set(win, original);
+}
+
+function letExternalLinksIn(win) {
+  const original = linksKeptOut.get(win);
+  if (!original) return;
+  linksKeptOut.delete(win);
+  // A closing window has already dropped its own.
+  if (win.browserDOMWindow) win.browserDOMWindow = original;
+}
+
 this.trustedInput = class extends ExtensionAPI {
   onShutdown() {
-    for (const win of Services.wm.getEnumerator("navigator:browser")) setWindowLabel(win, null);
+    for (const win of Services.wm.getEnumerator("navigator:browser")) {
+      setWindowLabel(win, null);
+      letExternalLinksIn(win);
+    }
   }
 
   getAPI(context) {
@@ -203,6 +272,13 @@ this.trustedInput = class extends ExtensionAPI {
           setWindowLabel(win, text, tooltip, () => {
             for (const fire of labelClickListeners) fire.async(windowId);
           });
+        },
+
+        // Links from other apps stop opening in this window (a session's) and go to the user's instead.
+        async keepExternalLinksOut(windowId) {
+          const win = context.extension.windowManager.get(windowId, context)?.window;
+          if (!win) throw new ExtensionError(`Invalid window ID: ${windowId}`);
+          keepExternalLinksOut(win);
         },
 
         // Replaces this add-on with the package at path, which reloads it. The caller doesn't get an answer, since

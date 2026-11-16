@@ -249,6 +249,8 @@ function nameWindow(sess) {
   browser.browserAction.setTitle({ windowId: sess.windowId, title: `Claude for Zen – window of ${name || 'a Claude session'}` });
   const tooltip = sess.terminal ? 'Click to show the terminal running this Claude session' : "This Claude session's window";
   browser.trustedInput?.labelWindow(sess.windowId, `◆ Claude: ${name || 'session'}`, tooltip).catch(() => {});
+  // Links the user opens from other apps belong in their window, not this one.
+  browser.trustedInput?.keepExternalLinksOut?.(sess.windowId).catch(() => {});
   updateBadge();
 }
 

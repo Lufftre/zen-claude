@@ -47,6 +47,10 @@ minimized. `session_window` with `close: true` closes it and goes back to sharin
   other or interleave events.
 - Input into a session window makes it Gecko's active window; afterwards focus is handed back to the window that had
   it, so keys you type in your window stay there.
+- Links you open from other apps (Slack, a terminal) never land in a session's window. Zen has no main window: it
+  hands such a link to the window that was active last, which is often a session's. A session's window passes it on
+  to the window you last used that isn't one, or to a new window if you have none open. This needs the experiment,
+  and a window stays a session's until it is closed.
 
 ## Sessions on another machine
 
@@ -208,6 +212,14 @@ ZEN_CLAUDE_PORT=8766 node test/diag.mjs '[{"action":"left_click","coordinate":[1
 
 Stopping `web-ext` can leave the Zen it launched running. Leftover instances compete for port 8766 with old
 extension code, so check `pgrep -fl firefox-profile` between runs.
+
+`test/external-link.mjs` checks that links from other apps stay out of session windows. It hands the browser a link
+through the debugger, so start the instance with chrome debugging:
+
+```sh
+scripts/test-instance.sh --pref devtools.chrome.enabled=true --pref devtools.debugger.prompt-connection=false &
+node test/external-link.mjs
+```
 
 `test/smoke.js` runs a list of tool calls. `test/diag.mjs` opens a fresh tab of the test page, runs `computer` actions,
 and prints which events reached the page (with `isTrusted`), then closes the tab.
