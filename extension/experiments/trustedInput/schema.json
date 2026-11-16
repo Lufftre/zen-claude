@@ -25,6 +25,13 @@
         "parameters": [{ "name": "windowId", "type": "integer" }]
       },
       {
+        "name": "keepExternalLinksOut",
+        "type": "function",
+        "async": true,
+        "description": "Make links opened from other apps skip this window and open in the user's most recent other window.",
+        "parameters": [{ "name": "windowId", "type": "integer" }]
+      },
+      {
         "name": "installXpi",
         "type": "function",
         "async": true,
