@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Claude for Zen",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Lets Claude Code control this browser through a local MCP server.",
   "browser_specific_settings": {
     "gecko": {
@@ -23,11 +23,13 @@
     "storage",
     "webRequest",
     "webNavigation",
-    "<all_urls>"
+    "<all_urls>",
+    "nativeMessaging"
   ],
   "background": {
     "scripts": [
-      "background.js"
+      "background.js",
+      "agent.js"
     ],
     "persistent": true
   },
@@ -53,6 +55,13 @@
         "default": "Alt+Shift+A"
       },
       "description": "Mark an element or area of the page to show Claude"
+    },
+    "browser-agent": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+J",
+        "mac": "Command+J"
+      },
+      "description": "Open or put away the browser agent beside this tab"
     }
   },
   "experiment_apis": {

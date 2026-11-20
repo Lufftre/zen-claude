@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Agent</title>
+<link rel="stylesheet" href="../vendor/xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1d1b; overflow: hidden; }
+  #term { position: absolute; inset: 6px 4px 4px 8px; }
+  #note { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 12px; font: 12px -apple-system, system-ui, sans-serif; color: #c9c4bb; background: #2a2825; display: none; }
+  #note.on { display: block; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<div id="note"></div>
+<script src="../vendor/xterm.js"></script>
+<script src="../vendor/addon-fit.js"></script>
+<script src="terminal.js"></script>
+</body>
+</html>

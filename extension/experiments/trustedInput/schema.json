@@ -4,6 +4,22 @@
     "description": "Browser-level (isTrusted) mouse, keyboard and wheel input, synthesized in the parent process.",
     "functions": [
       {
+        "name": "freeShortcut",
+        "type": "function",
+        "async": true,
+        "description": "Disable the browser's own key for a shortcut in every window, now and later, so an extension command can use it.",
+        "parameters": [
+          {
+            "name": "key",
+            "type": "string"
+          },
+          {
+            "name": "modifiers",
+            "type": "string"
+          }
+        ]
+      },
+      {
         "name": "openWindow",
         "type": "function",
         "async": true,
@@ -22,21 +38,36 @@
         "type": "function",
         "async": true,
         "description": "Give a browser window Gecko focus without raising it on screen.",
-        "parameters": [{ "name": "windowId", "type": "integer" }]
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "integer"
+          }
+        ]
       },
       {
         "name": "keepExternalLinksOut",
         "type": "function",
         "async": true,
         "description": "Make links opened from other apps skip this window and open in the user's most recent other window.",
-        "parameters": [{ "name": "windowId", "type": "integer" }]
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "integer"
+          }
+        ]
       },
       {
         "name": "installXpi",
         "type": "function",
         "async": true,
         "description": "Replace this add-on with the package at an absolute path, which reloads it.",
-        "parameters": [{ "name": "path", "type": "string" }]
+        "parameters": [
+          {
+            "name": "path",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "status",
@@ -50,11 +81,19 @@
         "async": true,
         "description": "Dispatch mouse events at viewport (CSS px) coordinates of a visible tab.",
         "parameters": [
-          { "name": "tabId", "type": "integer" },
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
           {
             "name": "events",
             "type": "array",
-            "items": { "type": "object", "additionalProperties": { "type": "any" } }
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "any"
+              }
+            }
           }
         ]
       },
@@ -63,11 +102,26 @@
         "type": "function",
         "async": true,
         "parameters": [
-          { "name": "tabId", "type": "integer" },
-          { "name": "x", "type": "number" },
-          { "name": "y", "type": "number" },
-          { "name": "deltaX", "type": "number" },
-          { "name": "deltaY", "type": "number" }
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "x",
+            "type": "number"
+          },
+          {
+            "name": "y",
+            "type": "number"
+          },
+          {
+            "name": "deltaX",
+            "type": "number"
+          },
+          {
+            "name": "deltaY",
+            "type": "number"
+          }
         ]
       },
       {
@@ -76,11 +130,19 @@
         "async": true,
         "description": "Press keys in the tab's focused element. Each key is { key, ctrlKey?, shiftKey?, altKey?, metaKey? }.",
         "parameters": [
-          { "name": "tabId", "type": "integer" },
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
           {
             "name": "keys",
             "type": "array",
-            "items": { "type": "object", "additionalProperties": { "type": "any" } }
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "any"
+              }
+            }
           }
         ]
       },
@@ -90,8 +152,14 @@
         "async": true,
         "description": "Type a string into the tab's focused element, one key press per character.",
         "parameters": [
-          { "name": "tabId", "type": "integer" },
-          { "name": "text", "type": "string" }
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "text",
+            "type": "string"
+          }
         ]
       },
       {
@@ -99,15 +167,29 @@
         "type": "function",
         "async": true,
         "parameters": [
-          { "name": "tabIds", "type": "array", "items": { "type": "integer" } },
-          { "name": "layout", "type": "string" }
+          {
+            "name": "tabIds",
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "layout",
+            "type": "string"
+          }
         ]
       },
       {
         "name": "dismissPopups",
         "type": "function",
         "async": true,
-        "parameters": [{ "name": "tabId", "type": "integer" }]
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          }
+        ]
       },
       {
         "name": "labelWindow",
@@ -115,9 +197,20 @@
         "async": true,
         "description": "Show a label naming the window's owner in its sidebar, or remove it when text is null.",
         "parameters": [
-          { "name": "windowId", "type": "integer" },
-          { "name": "text", "type": "string", "optional": true },
-          { "name": "tooltip", "type": "string", "optional": true }
+          {
+            "name": "windowId",
+            "type": "integer"
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "optional": true
+          },
+          {
+            "name": "tooltip",
+            "type": "string",
+            "optional": true
+          }
         ]
       }
     ],
@@ -126,7 +219,12 @@
         "name": "onWindowLabelClicked",
         "type": "function",
         "description": "The user clicked a window's label.",
-        "parameters": [{ "name": "windowId", "type": "integer" }]
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "integer"
+          }
+        ]
       }
     ]
   }

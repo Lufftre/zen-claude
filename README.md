@@ -52,6 +52,29 @@ minimized. `session_window` with `close: true` closes it and goes back to sharin
   to the window you last used that isn't one, or to a new window if you have none open. This needs the experiment,
   and a window stays a session's until it is closed.
 
+## Browser agent (⌘J)
+
+⌘J on any page opens a Claude Code agent for that tab, in a Zen split beside it, with an empty prompt. The agent is
+told it's a browser agent and which tab it's for, and looks at the page with this extension's tools on that tab. ⌘J
+again puts the terminal away; the agent keeps running, so the next ⌘J on the tab brings back the same one.
+
+```
+extension/agent.js ──⌘J──▶ agent/terminal.html (xterm.js) ──native messaging──▶ agent/host.js ──Unix socket──▶ Rex
+```
+
+- The agent runs in [Rex](https://superlogical.com), as a window of a Rex session called `browser`, so it survives
+  closing the terminal or the browser. It starts in `~/Library/Application Support/zen-claude/browser-agent`.
+- `agent/host.js` is a native messaging host: Zen starts it for each open terminal. It starts the agent with the
+  `rex` CLI and bridges the terminal over Rex's client protocol (`GET /llms.txt` on Rex's socket documents it).
+- Zen keeps ⌘J for Downloads, so the extension clears that shortcut the way `about:keyboard` does; reset it there to
+  get Downloads back.
+
+Install the host once, and again after moving the repo or changing Node:
+
+```sh
+npm run agent:install
+```
+
 ## Sessions on another machine
 
 Claude sessions on another machine, such as a VPS you SSH into, can use the browser through an SSH tunnel. Run this
