@@ -46,6 +46,19 @@ process.stdin.on("end", () => end());
 
 // Starting the agent.
 
+// Zen, opened from the Dock, has macOS's bare PATH, and so does everything this host starts. Claude Code and its
+// hooks need the user's own (Homebrew's node, ~/.local/bin): ask their shell once, as a terminal would set it up.
+let userPath = null;
+async function shellPath() {
+  if (userPath) return userPath;
+  try {
+    const { stdout } = await run(process.env.SHELL || "/bin/zsh", ["-ilc", 'printf "\n%s" "$PATH"'], { timeout: 10000 });
+    userPath = stdout.split("\n").pop().trim();
+  } catch {}
+  if (!userPath) userPath = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local/bin"), process.env.PATH].filter(Boolean).join(":");
+  return userPath;
+}
+
 async function rex(...args) {
   try {
     const { stdout } = await run(REX, args, { timeout: 15000, maxBuffer: 10_000_000 });
@@ -68,7 +81,7 @@ function brief(tab) {
 async function startAgent(tab) {
   mkdirSync(HOME, { recursive: true });
   const label = `Browser: ${tab.title || tab.url}`.slice(0, 48);
-  const command = [CLAUDE, "-n", label, "--append-system-prompt", brief(tab)];
+  const command = ["/usr/bin/env", `PATH=${await shellPath()}`, CLAUDE, "-n", label, "--append-system-prompt", brief(tab)];
   const { sessions } = JSON.parse(await rex("ls", "--json"));
   const found = sessions.find((s) => s.label === SESSION);
   if (!found) {
