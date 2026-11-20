@@ -201,6 +201,46 @@ this.trustedInput = class extends ExtensionAPI {
 
     // Firefox replaces non-ExtensionError exceptions with "An unexpected error occurred"; keep the real message.
     const api = {
+        // Frees a shortcut the browser has taken, such as Zen's ⌘J for Downloads, so an extension command can have
+        // it. key is the character ("j"), modifiers as a <key> names them ("accel"); extension keys are left alone.
+        // The browser's key is cleared through CustomKeys, as clearing it in about:keyboard does: kept in the profile,
+        // shown there, and undone there with Reset. Without CustomKeys it is disabled in the windows open now. Gives
+        // the ids of the keys it cleared.
+        async freeShortcut(key, modifiers) {
+          const norm = (m) => (m || "").split(/[\s,]+/).filter(Boolean).sort().join(",");
+          const ids = new Set();
+          for (const win of Services.wm.getEnumerator("navigator:browser")) {
+            for (const el of win.document.querySelectorAll("key[id]")) {
+              if (el.id.startsWith("ext-key-id-")) continue;
+              if ((el.getAttribute("key") || "").toLowerCase() !== key.toLowerCase()) continue;
+              if (norm(el.getAttribute("modifiers")) !== norm(modifiers)) continue;
+              ids.add(el.id);
+            }
+          }
+          let CustomKeys = null;
+          try {
+            ({ CustomKeys } = ChromeUtils.importESModule("moz-src:///browser/components/customkeys/CustomKeys.sys.mjs"));
+          } catch {}
+          for (const id of ids) {
+            if (CustomKeys) {
+              CustomKeys.clearKey(id);
+              continue;
+            }
+            // A changed <key> only counts once its keyset is put back in the document.
+            for (const win of Services.wm.getEnumerator("navigator:browser")) {
+              const el = win.document.getElementById(id);
+              if (!el) continue;
+              el.setAttribute("disabled", "true");
+              const keyset = el.parentElement;
+              const parent = keyset.parentElement;
+              const next = keyset.nextSibling;
+              keyset.remove();
+              parent.insertBefore(keyset, next);
+            }
+          }
+          return [...ids];
+        },
+
         // Zen split view. layout: "vertical" (side by side), "horizontal" (stacked), "grid" or "unsplit".
         async splitView(tabIds, layout) {
           const tabs = tabIds.map(id => {

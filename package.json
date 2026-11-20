@@ -11,7 +11,8 @@
     "start": "node server/index.js",
     "ext:run": "web-ext run --source-dir extension --firefox=/Applications/Zen.app/Contents/MacOS/zen --pref zen.welcome-screen.seen=true --pref extensions.experiments.enabled=true",
     "ext:build": "node scripts/build.mjs",
-    "ext:lint": "web-ext lint --source-dir extension"
+    "ext:lint": "web-ext lint --source-dir extension",
+    "agent:install": "node scripts/install-agent.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
