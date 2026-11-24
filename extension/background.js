@@ -231,7 +231,21 @@ async function viewportInfo(tabId) {
 const sessions = new Map(); // session id -> { own, windowId }
 
 let agentsZen = false;
-ROLE.then((role) => { agentsZen = role === 'agents'; });
+ROLE.then((role) => {
+  agentsZen = role === 'agents';
+  updateDockBadge();
+});
+
+// Agent Zen's Dock icon shows how many agents have a window open in it.
+let dockBadge = null;
+async function updateDockBadge() {
+  if (!agentsZen) return;
+  const count = [...sessions.values()].filter((s) => s.own && s.windowId != null).length;
+  const text = count ? String(count) : '';
+  if (text === dockBadge) return;
+  dockBadge = text;
+  await browser.trustedInput.setDockBadge(text).catch((err) => console.warn('Claude for Zen: no Dock badge:', err));
+}
 
 function sessionFor(s) {
   if (!s?.id) return null;
@@ -285,6 +299,7 @@ async function sessionWindow(sess) {
     .then((id) => {
       sess.windowId = id;
       nameWindow(sess);
+      updateDockBadge();
       return id;
     })
     .finally(() => { sess.creating = null; });
@@ -293,14 +308,30 @@ async function sessionWindow(sess) {
 
 let openWindowError = null;
 
+// In agent Zen, a window no session owns, with nothing but about: pages in it, is one Zen opened itself: its start
+// window, which may still be on its way when the first session asks.
+async function spareWindows() {
+  const windows = await browser.windows.getAll({ populate: true, windowTypes: ['normal'] });
+  return windows.filter((w) => !isSessionWindow(w.id) && w.tabs.every((t) => t.url.startsWith('about:'))).map((w) => w.id);
+}
+
+async function closeSpareWindows(keep) {
+  for (const id of await spareWindows()) if (id !== keep) await browser.windows.remove(id).catch(() => {});
+}
+
 async function openWindow() {
-  // Agent Zen starts with an empty window (no tabs, as Zen shows it); the first session takes it rather than leave it
-  // lying about.
+  // The first session takes agent Zen's start window rather than leave it lying about.
   if (agentsZen) {
-    const blank = (await browser.windows.getAll({ populate: true, windowTypes: ['normal'] }))
-      .find((w) => !isSessionWindow(w.id) && w.tabs.every((t) => /^about:(blank|newtab|home)$/.test(t.url)) && w.tabs.length <= 1);
-    if (blank) return blank.id;
+    const [spare] = await spareWindows();
+    if (spare != null) return spare;
   }
+  const id = await openNewWindow();
+  // A start window that turned up after all would be left empty beside it.
+  if (agentsZen) setTimeout(() => closeSpareWindows(id), 3000);
+  return id;
+}
+
+async function openNewWindow() {
   // Zen's windows.create gives a synced window, which mirrors the user's tabs; the experiment opens an unsynced one.
   if (browser.trustedInput?.openWindow) {
     try {
@@ -315,6 +346,7 @@ async function openWindow() {
 
 browser.windows.onRemoved.addListener((windowId) => {
   for (const sess of sessions.values()) if (sess.windowId === windowId) sess.windowId = null;
+  updateDockBadge();
 });
 
 const isSessionWindow = (windowId) => [...sessions.values()].some((s) => s.windowId === windowId);
@@ -663,6 +695,7 @@ async function restoreHandoff() {
     sessions.set(s.id, s);
     nameWindow(s);
   }
+  updateDockBadge();
   state.activity.unshift({ time: Date.now(), method: 'update', summary: `${handoff.from} → ${VERSION}`, ok: true });
 }
 
@@ -673,7 +706,7 @@ const internalHandlers = {
   },
 
   async extension_info() {
-    return { version: VERSION, build: await BUILD, canUpdate: !!browser.trustedInput?.installXpi };
+    return { version: VERSION, build: await BUILD, canUpdate: !!browser.trustedInput?.installXpi, role: await ROLE, dockBadge };
   },
   self_update: selfUpdate,
 };
@@ -687,6 +720,7 @@ const handlers = {
       sess.own = false;
       sess.windowId = null;
       if (windowId != null) await browser.windows.remove(windowId).catch(() => {});
+      updateDockBadge();
       return { text: "Closed this session's window. Calls now use the focused window." };
     }
     sess.own = true;
