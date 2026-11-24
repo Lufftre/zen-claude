@@ -19,6 +19,9 @@ const state = {
   activity: [], // recent tool calls for the popup
 };
 
+// "agents" in the Zen that holds agents' own windows (scripts/agent-zen.mjs makes its profile), "user" in the user's.
+const ROLE = (browser.trustedInput?.role?.() ?? Promise.resolve('user')).catch(() => 'user');
+
 // ---------------------------------------------------------------------------
 // Connection
 
@@ -57,7 +60,7 @@ async function connect() {
     updateBadge();
     const info = await browser.runtime.getBrowserInfo().catch(() => ({}));
     const build = await BUILD;
-    ws.send(JSON.stringify({ type: 'hello', version: VERSION, build, browser: `${info.name || ''} ${info.version || ''}`.trim() }));
+    ws.send(JSON.stringify({ type: 'hello', version: VERSION, build, role: await ROLE, browser: `${info.name || ''} ${info.version || ''}`.trim() }));
   };
   ws.onmessage = (e) => onRequest(ws, e.data);
   ws.onclose = (e) => {
@@ -227,10 +230,15 @@ async function viewportInfo(tabId) {
 
 const sessions = new Map(); // session id -> { own, windowId }
 
+let agentsZen = false;
+ROLE.then((role) => { agentsZen = role === 'agents'; });
+
 function sessionFor(s) {
   if (!s?.id) return null;
   let sess = sessions.get(s.id);
   if (!sess) sessions.set(s.id, (sess = { id: s.id, own: !!s.ownWindow, windowId: null, name: null }));
+  // The hub only sends this Zen the calls of sessions with a window of their own.
+  if (agentsZen) sess.own = true;
   if (s.label !== sess.label || !!s.terminal !== sess.terminal) {
     sess.label = s.label;
     sess.terminal = !!s.terminal;
@@ -286,6 +294,13 @@ async function sessionWindow(sess) {
 let openWindowError = null;
 
 async function openWindow() {
+  // Agent Zen starts with an empty window (no tabs, as Zen shows it); the first session takes it rather than leave it
+  // lying about.
+  if (agentsZen) {
+    const blank = (await browser.windows.getAll({ populate: true, windowTypes: ['normal'] }))
+      .find((w) => !isSessionWindow(w.id) && w.tabs.every((t) => /^about:(blank|newtab|home)$/.test(t.url)) && w.tabs.length <= 1);
+    if (blank) return blank.id;
+  }
   // Zen's windows.create gives a synced window, which mirrors the user's tabs; the experiment opens an unsynced one.
   if (browser.trustedInput?.openWindow) {
     try {
@@ -407,11 +422,19 @@ browser.webNavigation.onBeforeNavigate.addListener(async (d) => {
   if (!m) return;
   const windowId = Number(m[1]);
   await browser.tabs.remove(d.tabId).catch(() => {});
-  if (![...sessions.values()].some((s) => s.own && s.windowId === windowId)) return;
-  const { state } = await browser.windows.get(windowId).catch(() => ({}));
-  if (state === undefined) return;
-  await browser.windows.update(windowId, { focused: true, ...(state === 'minimized' ? { state: 'normal' } : {}) });
+  // Links open in the user's Zen, and agents' windows are in the other one: the hub passes it on.
+  if (!(await focusSessionWindow(windowId)) && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'focusWindow', windowId }));
+  }
 }, { url: [{ hostEquals: 'zen-claude.localhost' }] });
+
+async function focusSessionWindow(windowId) {
+  if (![...sessions.values()].some((s) => s.own && s.windowId === windowId)) return false;
+  const { state: shown } = await browser.windows.get(windowId).catch(() => ({}));
+  if (shown === undefined) return false;
+  await browser.windows.update(windowId, { focused: true, ...(shown === 'minimized' ? { state: 'normal' } : {}) });
+  return true;
+}
 
 const pendingRequests = new Map(); // requestId -> entry
 
@@ -645,6 +668,10 @@ async function restoreHandoff() {
 
 // Not tools: the MCP server calls these itself.
 const internalHandlers = {
+  async focus_window({ windowId }) {
+    return { focused: await focusSessionWindow(windowId) };
+  },
+
   async extension_info() {
     return { version: VERSION, build: await BUILD, canUpdate: !!browser.trustedInput?.installXpi };
   },

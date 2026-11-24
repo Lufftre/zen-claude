@@ -17,6 +17,7 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TOOLS } from './tools.js';
+import { startAgentZen } from './agent-zen.js';
 
 const PORT = Number(process.env.ZEN_CLAUDE_PORT || 8765);
 const HOST = '127.0.0.1';
@@ -27,7 +28,7 @@ const STARTED_HEADER = 'x-zen-claude-started';
 // a fingerprint of their source; a hub that finds a server started after it with different code hands the port over.
 // ZEN_CLAUDE_CODE stands in for it in tests.
 const CODE = process.env.ZEN_CLAUDE_CODE || createHash('sha1')
-  .update(['index.js', 'tools.js'].map((f) => readFileSync(new URL(f, import.meta.url))).join('\0'))
+  .update(['index.js', 'tools.js', 'agent-zen.js'].map((f) => readFileSync(new URL(f, import.meta.url))).join('\0'))
   .digest('hex');
 const STARTED = Date.now();
 // A server on another machine reaches the hub through a Unix socket that SSH forwards to the browser's machine
@@ -40,6 +41,12 @@ const HUB_URL = REMOTE ? `ws+unix:${HUB_SOCKET}:/` : `ws://${HOST}:${PORT}`;
 const SUPERSEDED = 409;
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXTENSION_GRACE_MS = 5_000;
+// Agents' own windows go to a second Zen (server/agent-zen.js) unless ZEN_CLAUDE_AGENT_ZEN=0, which keeps them in the
+// user's Zen as before.
+const AGENT_ZEN = process.env.ZEN_CLAUDE_AGENT_ZEN !== '0' && process.platform === 'darwin';
+const AGENT_ZEN_START_MS = 30_000;
+// Marks are the user's, so these always go to the user's Zen.
+const USER_METHODS = new Set(['get_marked_areas', 'resolve_marks']);
 // Identifies this Claude session to the extension, which keeps per-session state such as a dedicated window. The
 // label names that window; terminal says whether the extension can ask us to bring our terminal pane forward.
 const SESSION = {
@@ -55,7 +62,8 @@ class Bridge {
   constructor() {
     this.mode = null; // 'hub' | 'peer'
     this.wss = null;
-    this.extension = null; // hub: socket to the extension
+    this.browsers = { user: null, agents: null }; // hub: socket to the extension in each Zen
+    this.startingAgentZen = null;
     this.hubSocket = null; // peer: socket to the hub
     this.pending = new Map(); // id -> { resolve, reject, timer }
     this.relayed = new Map(); // hub: relayed id -> { peer, originalId }
@@ -126,7 +134,7 @@ class Bridge {
     const wss = this.wss;
     this.wss = null;
     this.mode = null;
-    this.extension = null;
+    this.browsers = { user: null, agents: null };
     this.relayed.clear();
     this.peerSessions.clear();
     for (const client of wss.clients) client.terminate();
@@ -147,14 +155,14 @@ class Bridge {
   #onHubConnection(ws, req) {
     const origin = req.headers.origin || '';
     if (origin.startsWith('moz-extension://')) {
-      // First browser wins; others back off and retry until it disconnects.
-      if (this.extension?.readyState === WebSocket.OPEN) return ws.close(4001, 'another browser is connected');
-      this.extension = ws;
-      log('extension connected');
-      ws.on('message', (data) => this.#onExtensionMessage(data));
+      // Its hello says which Zen it is in; until then it gets nothing.
+      ws.on('message', (data) => this.#onExtensionMessage(ws, data));
       ws.on('close', () => {
-        if (this.extension === ws) this.extension = null;
-        log('extension disconnected');
+        for (const role of Object.keys(this.browsers)) {
+          if (this.browsers[role] !== ws) continue;
+          this.browsers[role] = null;
+          log(`extension in the ${role} Zen disconnected`);
+        }
       });
     } else if (!origin && req.headers[PEER_HEADER]) {
       // Browsers always send Origin on WebSocket handshakes, so a page can't get here.
@@ -168,10 +176,22 @@ class Bridge {
     }
   }
 
-  #onExtensionMessage(data) {
+  #onExtensionMessage(ws, data) {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
-    if (msg.type === 'hello') return log('extension', msg.version, msg.browser || '');
+    if (msg.type === 'hello') {
+      // Extensions before roles say nothing, and they are in the user's Zen.
+      const role = msg.role === 'agents' ? 'agents' : 'user';
+      // First browser wins; others back off and retry until it disconnects.
+      if (this.#open(role) && this.browsers[role] !== ws) return ws.close(4001, 'another browser is connected');
+      this.browsers[role] = ws;
+      return log(`extension in the ${role} Zen connected:`, msg.version, msg.browser || '');
+    }
+    // A link to an agent's window opened in the user's Zen; the window is in agent Zen.
+    if (msg.type === 'focusWindow') {
+      this.browsers.agents?.send(JSON.stringify({ id: `f${this.nextId++}`, method: 'focus_window', params: { windowId: msg.windowId } }));
+      return;
+    }
     // The user asked, from the browser, to see the terminal pane running a session.
     if (msg.type === 'focusTerminal') {
       if (msg.session === SESSION.id) return focusTerminal();
@@ -193,13 +213,43 @@ class Bridge {
     try { msg = JSON.parse(data); } catch { return; }
     if (msg.session?.id) this.peerSessions.set(msg.session.id, peer);
     if (msg.type === 'hello') return;
-    if (!this.extension || this.extension.readyState !== WebSocket.OPEN) {
-      peer.send(JSON.stringify({ id: msg.id, error: NOT_CONNECTED }));
-      return;
-    }
-    const id = `r${this.nextId++}`;
-    this.relayed.set(id, { peer, originalId: msg.id });
-    this.extension.send(JSON.stringify({ ...msg, id }));
+    this.#target(msg).then((target) => {
+      if (!this.#open(target)) return peer.send(JSON.stringify({ id: msg.id, error: notConnected(target) }));
+      const id = `r${this.nextId++}`;
+      this.relayed.set(id, { peer, originalId: msg.id });
+      this.browsers[target].send(JSON.stringify({ ...msg, id }));
+    });
+  }
+
+  #open(role) {
+    return this.browsers[role]?.readyState === WebSocket.OPEN;
+  }
+
+  // Which Zen a request goes to. Sessions with a window of their own work in agent Zen, started if need be; everything
+  // else, including marks, is in the user's. A request can also name its Zen, as updates do.
+  async #target(msg) {
+    if (msg.target) return msg.target;
+    if (!AGENT_ZEN || USER_METHODS.has(msg.method)) return 'user';
+    const own = msg.method === 'session_window' && !msg.params?.close ? true : !!msg.session?.ownWindow;
+    if (!own) return 'user';
+    if (!this.#open('agents')) await this.#startAgentZen();
+    // Without agent Zen, agents' windows open in the user's Zen, as before there was one.
+    return this.#open('agents') ? 'agents' : 'user';
+  }
+
+  #startAgentZen() {
+    this.startingAgentZen ??= (async () => {
+      try {
+        if (await startAgentZen({ root: ROOT, port: PORT })) log('started agent Zen');
+      } catch (err) {
+        return log('could not start agent Zen:', err.message);
+      }
+      // A running agent Zen reconnects within a few seconds; a new one takes longer.
+      const deadline = Date.now() + AGENT_ZEN_START_MS;
+      while (!this.#open('agents') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+      if (!this.#open('agents')) log('agent Zen did not connect');
+    })().finally(() => { this.startingAgentZen = null; });
+    return this.startingAgentZen;
   }
 
   #becomePeer() {
@@ -233,12 +283,10 @@ class Bridge {
     });
   }
 
-  // The extension polls every couple of seconds, so give it a moment right after startup.
+  // The extensions poll every couple of seconds, so give them a moment right after startup.
   async #waitForExtension(ms) {
     const deadline = Date.now() + ms;
-    while (this.extension?.readyState !== WebSocket.OPEN && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    while (!this.#open('user') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
   }
 
   #settle(msg) {
@@ -250,10 +298,15 @@ class Bridge {
     else p.resolve(msg.result);
   }
 
-  async call(method, params) {
+  async call(method, params, target) {
     await Promise.all([this.ensure(), refreshLabel()]);
     if (this.mode === 'hub') await this.#waitForExtension(EXTENSION_GRACE_MS);
-    const socket = this.mode === 'hub' ? this.extension : this.hubSocket;
+    let socket = this.hubSocket;
+    if (this.mode === 'hub') {
+      const to = await this.#target({ method, params, session: SESSION, target });
+      if (!this.#open(to)) throw new Error(notConnected(to));
+      socket = this.browsers[to];
+    }
     if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error(NOT_CONNECTED);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -262,7 +315,7 @@ class Bridge {
         reject(new Error(`Timed out after ${REQUEST_TIMEOUT_MS / 1000}s waiting for the browser.`));
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, method, params, session: SESSION }));
+      socket.send(JSON.stringify({ id, method, params, session: SESSION, ...(target && { target }) }));
     });
   }
 }
@@ -315,14 +368,24 @@ async function currentTree() {
   return git('rev-parse', 'HEAD:extension');
 }
 
-// Returns a note for the session when the extension is out of date and could not be updated.
+// Returns a note for the session when an extension is out of date and could not be updated. Agent Zen's is updated
+// too when it's running.
 async function updateExtension() {
   const tree = await currentTree();
   if (!tree) return null;
+  const user = await updateBrowser(tree, 'user');
+  const agents = await updateBrowser(tree, 'agents').catch((err) => {
+    if (err.message !== AGENTS_NOT_CONNECTED) log('could not update agent Zen:', err.message);
+    return null;
+  });
+  return [user, agents && `Agent Zen: ${agents}`].filter(Boolean).join('\n') || null;
+}
+
+async function updateBrowser(tree, target) {
   const manualUpdate = (version) => `The browser extension (${version}) is not the one in ${ROOT}, and can't update itself. ` +
     'Ask the user to run `npm run ext:build` there and open dist/claude-for-zen.xpi in Zen.';
   // Versions before 0.1.7 can't tell.
-  const info = await bridge.call('extension_info', {}).catch((err) => {
+  const info = await bridge.call('extension_info', {}, target).catch((err) => {
     if (/Unknown method/.test(err.message)) return { version: 'an old version', build: {}, canUpdate: false };
     throw err;
   });
@@ -333,14 +396,14 @@ async function updateExtension() {
   if (!existsSync(xpi)) {
     await execFileP(process.execPath, [join(ROOT, 'scripts/build.mjs'), '--xpi', xpi, ...(PORT === 8765 ? [] : ['--port', String(PORT)])], { timeout: 60_000 });
   }
-  log('updating the extension from', info.version, 'to', tree.slice(0, 8));
-  await bridge.call('self_update', { xpi });
+  log(`updating the extension in the ${target} Zen from`, info.version, 'to', tree.slice(0, 8));
+  await bridge.call('self_update', { xpi }, target);
   // The extension reloads and reconnects; carry on once it reports the new build.
   const deadline = Date.now() + UPDATE_WAIT_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 500));
-    const now = await bridge.call('extension_info', {}).catch(() => null);
-    if (now?.build?.tree === tree) return log('extension updated to', now.version), null;
+    const now = await bridge.call('extension_info', {}, target).catch(() => null);
+    if (now?.build?.tree === tree) return log(`extension in the ${target} Zen updated to`, now.version), null;
   }
   return 'Updating the browser extension did not finish; it may still be running an older version.';
 }
@@ -361,6 +424,8 @@ function updateOnce() {
 const NOT_CONNECTED =
   'The Zen/Firefox extension is not connected. Make sure the browser is running with the ' +
   '"Claude for Zen" extension loaded and enabled (check the toolbar icon).';
+const AGENTS_NOT_CONNECTED = 'Agent Zen is not connected.';
+const notConnected = (target) => (target === 'agents' ? AGENTS_NOT_CONNECTED : NOT_CONNECTED);
 
 // Unless told otherwise, agents work in a window of their own so they don't take over the user's tabs. Pages the user
 // points at stay in the user's window, so that is left to the agent to judge rather than forced.
@@ -403,6 +468,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     await updateOnce();
     const result = toContent(await bridge.call(name, args));
+    // The hub sends a session with a window of its own to agent Zen, so it has to know.
+    if (name === 'session_window') SESSION.ownWindow = !args.close;
     if (updateNote) {
       result.content.push({ type: 'text', text: updateNote });
       updateNote = null;

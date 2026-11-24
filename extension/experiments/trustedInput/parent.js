@@ -337,6 +337,11 @@ this.trustedInput = class extends ExtensionAPI {
           install.install();
         },
 
+        // Which Zen this is: "agents" in the profile scripts/agent-zen.mjs makes for agents' windows, "user" otherwise.
+        async role() {
+          return Services.prefs.getStringPref("zen-claude.role", "user");
+        },
+
         async status() {
           try {
             eventUtils(Services.wm.getMostRecentWindow("navigator:browser"));

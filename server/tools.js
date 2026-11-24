@@ -27,7 +27,10 @@ export const TOOLS = [
       'that window, and screenshots and input there no longer switch tabs in the window the user is looking at. ' +
       'Other sessions keep their own windows. Calling it again returns the existing window. The window title names ' +
       'this session (by default after the conversation title or folder) so the user can tell whose window it is; ' +
-      "pass name to choose it. close: true closes the window and goes back to sharing the user's focused window.",
+      "pass name to choose it. close: true closes the window and goes back to sharing the user's focused window. " +
+      "On macOS the window usually opens in agent Zen, a second Zen with its own profile (not signed in where the " +
+      "user is): while this session has a window there, tab IDs and tabs_context are agent Zen's, and the user's " +
+      "tabs are out of reach until close: true.",
     inputSchema: {
       type: 'object',
       properties: {

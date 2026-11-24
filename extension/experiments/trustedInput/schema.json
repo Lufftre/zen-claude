@@ -70,6 +70,13 @@
         ]
       },
       {
+        "name": "role",
+        "type": "function",
+        "async": true,
+        "description": "Which Zen this is: \"agents\" (the profile for agents' windows) or \"user\".",
+        "parameters": []
+      },
+      {
         "name": "status",
         "type": "function",
         "async": true,
