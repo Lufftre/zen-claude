@@ -52,6 +52,25 @@ minimized. `session_window` with `close: true` closes it and goes back to sharin
   to the window you last used that isn't one, or to a new window if you have none open. This needs the experiment,
   and a window stays a session's until it is closed.
 
+### Agent Zen
+
+On macOS, sessions' own windows open in **agent Zen**: a second Zen, with a profile of its own, that the hub starts
+in the background the first time a session calls `session_window`. macOS treats it as a separate app, with its own
+Dock icon, so Cmd-\` in your Zen only cycles through your windows, and links from other apps go to your Zen. Its
+first window goes to the first session; later ones open unsynced beside it.
+
+- Each session works in one Zen at a time. With a window of its own it's in agent Zen, where tab IDs and
+  `tabs_context` are agent Zen's; your tabs are out of its reach until `session_window` with `close: true`, which
+  puts it back in your Zen. Marks (`get_marked_areas`, `resolve_marks`) always come from your Zen.
+- The profile is `~/Library/Application Support/zen/Profiles/claude-agents` (`ZEN_CLAUDE_AGENT_PROFILE` to move it).
+  It isn't signed in anywhere you are; sign in there once if agents need a site, or have them use your window.
+- The first start builds the extension from this checkout into the profile; after that it updates itself like
+  yours.
+- `ZEN_CLAUDE_AGENT_ZEN=0` keeps sessions' windows in your Zen, as before. So does agent Zen failing to start, which
+  the hub logs.
+- `node test/agent-zen.mjs` checks it end to end, with its own hub on port 8799 and a throwaway profile, so it leaves
+  your Zen and running sessions alone.
+
 ## Browser agent (⌘J)
 
 ⌘J on any page opens a Claude Code agent for that tab, in a Zen split beside it, with an empty prompt. The agent is
