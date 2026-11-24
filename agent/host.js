@@ -178,7 +178,7 @@ async function attach({ tab, agent: known, cols, rows }) {
   // The screen now, as escape sequences, then the stream from after its snapshot.
   const screen = await call("com.superlogical.terminal.format", args({ args: {
     format: "vt", extra_cursor: true, extra_modes: true, extra_style: true, extra_charsets: true, extra_scrolling_region: true,
-    extra_tabstops: true, extra_keyboard: true, extra_kitty_keyboard: true, extra_pwd: true, extra_hyperlink: true,
+    extra_tabstops: true, extra_keyboard: true, extra_kitty_keyboard: true, extra_pwd: true, extra_hyperlink: true, extra_palette: true,
   } }));
   send({ type: "replay", data: "\x1bc" + (screen?.content ?? "") });
   const { ticket } = await call("data.connect", args({ data_ref_id: "terminal", subprotocol: "rex.data.terminal.v1" }));
@@ -218,6 +218,8 @@ async function attach({ tab, agent: known, cols, rows }) {
       try {
         const msg = JSON.parse(pending.subarray(at + marker.length, st).toString("utf8"));
         if (msg.type === "resize") owner = msg.owner ?? null;
+        // The terminal's colours, as Rex.app shows them: the page draws with the same ones.
+        if (msg.type === "theme") send({ type: "theme", foreground: msg.foreground, background: msg.background, cursor: msg.cursor, palette: msg.palette ?? [] });
         if (msg.type === "child_exited") send({ type: "exit", code: msg.exit_code ?? 0 });
       } catch {}
       inSnapshot = false;
