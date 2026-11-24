@@ -68,6 +68,28 @@ function focusBrowser(browser) {
   if (Services.focus.focusedElement !== browser) browser.focus();
 }
 
+// Objective-C calls through js-ctypes, for the AppKit things Zen has no call for. Runs on the main thread.
+function ctypes() {
+  return ChromeUtils.importESModule("resource://gre/modules/ctypes.sys.mjs").ctypes;
+}
+
+function withAppKit(fn) {
+  const c = ctypes();
+  const objc = c.open("/usr/lib/libobjc.A.dylib");
+  try {
+    const id = c.voidptr_t;
+    return fn({
+      cls: objc.declare("objc_getClass", c.default_abi, id, c.char.ptr),
+      sel: objc.declare("sel_registerName", c.default_abi, id, c.char.ptr),
+      send: objc.declare("objc_msgSend", c.default_abi, id, id, id),
+      sendId: objc.declare("objc_msgSend", c.default_abi, id, id, id, id),
+      sendStr: objc.declare("objc_msgSend", c.default_abi, id, id, id, c.char.ptr),
+    });
+  } finally {
+    objc.close();
+  }
+}
+
 const LABEL_ID = "claude-for-zen-window-label";
 
 // Zen hides the window title and usually the extension's toolbar button, so a session's window is named by a label
@@ -340,6 +362,17 @@ this.trustedInput = class extends ExtensionAPI {
         // Which Zen this is: "agents" in the profile scripts/agent-zen.mjs makes for agents' windows, "user" otherwise.
         async role() {
           return Services.prefs.getStringPref("zen-claude.role", "user");
+        },
+
+        // Text on the Dock icon, or none for "": agent Zen's count of agents' windows. Through AppKit, as Zen's
+        // badgeText puts a view of its own on the Dock tile.
+        async setDockBadge(text) {
+          if (Services.appinfo.OS !== "Darwin") return;
+          withAppKit(({ cls, sel, send, sendId, sendStr }) => {
+            const tile = send(send(cls("NSApplication"), sel("sharedApplication")), sel("dockTile"));
+            const label = text ? sendStr(cls("NSString"), sel("stringWithUTF8String:"), text) : ctypes().voidptr_t(0);
+            sendId(tile, sel("setBadgeLabel:"), label);
+          });
         },
 
         async status() {

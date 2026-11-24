@@ -77,6 +77,18 @@
         "parameters": []
       },
       {
+        "name": "setDockBadge",
+        "type": "function",
+        "async": true,
+        "description": "Show text on the app's Dock icon (macOS); \"\" removes it.",
+        "parameters": [
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ]
+      },
+      {
         "name": "status",
         "type": "function",
         "async": true,

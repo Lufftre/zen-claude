@@ -55,9 +55,11 @@ minimized. `session_window` with `close: true` closes it and goes back to sharin
 ### Agent Zen
 
 On macOS, sessions' own windows open in **agent Zen**: a second Zen, with a profile of its own, that the hub starts
-in the background the first time a session calls `session_window`. macOS treats it as a separate app, with its own
-Dock icon, so Cmd-\` in your Zen only cycles through your windows, and links from other apps go to your Zen. Its
-first window goes to the first session; later ones open unsynced beside it.
+in the background the first time a session calls `session_window`, or the next time after you quit it. It runs as
+**Zen Agents**, a copy of Zen with its own bundle id and an orange icon, so macOS treats it as a separate app: Cmd-\` in
+your Zen only cycles through your windows, links from other apps go to your Zen, and its Dock icon carries a badge
+with the number of agents' windows open. Its first window goes to the first session; later ones open unsynced beside
+it.
 
 - Each session works in one Zen at a time. With a window of its own it's in agent Zen, where tab IDs and
   `tabs_context` are agent Zen's; your tabs are out of its reach until `session_window` with `close: true`, which
@@ -66,6 +68,12 @@ first window goes to the first session; later ones open unsynced beside it.
   It isn't signed in anywhere you are; sign in there once if agents need a site, or have them use your window.
 - The first start builds the extension from this checkout into the profile; after that it updates itself like
   yours.
+- `Zen Agents.app` lives in `~/Library/Application Support/zen-claude/` (`ZEN_CLAUDE_AGENTS_APP` to move it). It's a
+  copy-on-write clone of `/Applications/Zen.app` (`ZEN_CLAUDE_ZEN_APP`), so it takes no room, signed again ad hoc as
+  the changed icon and bundle id break Zen's signature. Its updater is off: when Zen updates, the next start of agent
+  Zen makes a new copy. If making it fails, agent Zen runs as Zen itself, which works the same with Zen's icon.
+- A session keeps its window across a restart or resume of its conversation: it's known by Claude Code's session id,
+  and whether it has a window of its own is kept in `$TMPDIR/zen-claude-sessions/`.
 - `ZEN_CLAUDE_AGENT_ZEN=0` keeps sessions' windows in your Zen, as before. So does agent Zen failing to start, which
   the hub logs.
 - `node test/agent-zen.mjs` checks it end to end, with its own hub on port 8799 and a throwaway profile, so it leaves

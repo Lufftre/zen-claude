@@ -11,7 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -49,9 +49,14 @@ const AGENT_ZEN_START_MS = 30_000;
 const USER_METHODS = new Set(['get_marked_areas', 'resolve_marks']);
 // Identifies this Claude session to the extension, which keeps per-session state such as a dedicated window. The
 // label names that window; terminal says whether the extension can ask us to bring our terminal pane forward.
+// Claude Code's session id outlives this process: a resumed conversation gets a new server with the same id, so it
+// finds its window again. Whether the session has a window of its own is kept on disk for the same reason; otherwise a
+// resumed agent, which remembers having called session_window, would be sent to the user's Zen.
+const CLAUDE_SESSION = process.env.CLAUDE_CODE_SESSION_ID;
+const OWN_FILE = CLAUDE_SESSION && /^[\w-]+$/.test(CLAUDE_SESSION) ? join(tmpdir(), 'zen-claude-sessions', CLAUDE_SESSION) : null;
 const SESSION = {
-  id: randomUUID(),
-  ownWindow: process.env.ZEN_CLAUDE_WINDOW === '1',
+  id: CLAUDE_SESSION || randomUUID(),
+  ownWindow: process.env.ZEN_CLAUDE_WINDOW === '1' || (!!OWN_FILE && existsSync(OWN_FILE)),
   label: basename(process.cwd()),
   terminal: !!process.env.REX_BLOCK,
 };
@@ -240,7 +245,7 @@ class Bridge {
   #startAgentZen() {
     this.startingAgentZen ??= (async () => {
       try {
-        if (await startAgentZen({ root: ROOT, port: PORT })) log('started agent Zen');
+        if (await startAgentZen({ root: ROOT, port: PORT, log })) log('started agent Zen');
       } catch (err) {
         return log('could not start agent Zen:', err.message);
       }
@@ -469,7 +474,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await updateOnce();
     const result = toContent(await bridge.call(name, args));
     // The hub sends a session with a window of its own to agent Zen, so it has to know.
-    if (name === 'session_window') SESSION.ownWindow = !args.close;
+    if (name === 'session_window') rememberOwnWindow(!args.close);
     if (updateNote) {
       result.content.push({ type: 'text', text: updateNote });
       updateNote = null;
@@ -479,6 +484,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     return { isError: true, content: [{ type: 'text', text: err.message }] };
   }
 });
+
+function rememberOwnWindow(own) {
+  SESSION.ownWindow = own;
+  if (!OWN_FILE) return;
+  try {
+    if (own) {
+      mkdirSync(join(tmpdir(), 'zen-claude-sessions'), { recursive: true });
+      writeFileSync(OWN_FILE, '');
+    } else {
+      rmSync(OWN_FILE, { force: true });
+    }
+  } catch (err) {
+    log('could not remember the session window:', err.message);
+  }
+}
 
 // The extension returns { text?, image?: { data, mimeType }, images?: [...] }.
 function toContent(result) {
