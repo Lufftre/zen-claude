@@ -72,6 +72,9 @@ it.
   copy-on-write clone of `/Applications/Zen.app` (`ZEN_CLAUDE_ZEN_APP`), so it takes no room, signed again ad hoc as
   the changed icon and bundle id break Zen's signature. Its updater is off: when Zen updates, the next start of agent
   Zen makes a new copy. If making it fails, agent Zen runs as Zen itself, which works the same with Zen's icon.
+- Zen Agents claims `zen-agents://` links. The zen-window mod links to an agent's window as
+  `zen-agents://session/<id>`, so macOS hands it straight to agent Zen, which brings that session's window forward,
+  without your Zen coming forward first. Started by such a link, Zen Agents opens agent Zen's profile.
 - A session keeps its window across a restart or resume of its conversation: it's known by Claude Code's session id,
   and whether it has a window of its own is kept in `$TMPDIR/zen-claude-sessions/`.
 - `ZEN_CLAUDE_AGENT_ZEN=0` keeps sessions' windows in your Zen, as before. So does agent Zen failing to start, which

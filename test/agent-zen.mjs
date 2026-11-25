@@ -126,5 +126,9 @@ try {
   for (const pid of zenPids()) process.kill(pid);
   await new Promise((r) => setTimeout(r, 1500));
   rmSync(profile, { recursive: true, force: true });
+  // Its copy claims zen-agents:// like the real one; macOS mustn't remember it once it's gone.
+  try {
+    execFileSync('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister', ['-u', agentsApp]);
+  } catch {}
   rmSync(join(agentsApp, '..'), { recursive: true, force: true });
 }

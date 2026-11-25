@@ -89,6 +89,13 @@
         ]
       },
       {
+        "name": "activateApp",
+        "type": "function",
+        "async": true,
+        "description": "Bring this app to the front (macOS).",
+        "parameters": []
+      },
+      {
         "name": "status",
         "type": "function",
         "async": true,
