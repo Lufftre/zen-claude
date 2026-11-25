@@ -36,17 +36,23 @@ const PREFS = {
 
 const processes = async () => (await execFileP('ps', ['-axo', 'command='], { maxBuffer: 16 * 1024 * 1024 })).stdout.split('\n');
 
+// By its profile, or as Zen Agents.app started by a link (its profile then comes from LSEnvironment).
 export async function agentZenRunning() {
-  return (await processes()).some((line) => line.includes(`-profile ${AGENT_ZEN_PROFILE}`) && !line.includes('-contentproc'));
+  return (await processes()).some((line) => !line.includes('-contentproc') &&
+    (line.includes(`-profile ${AGENT_ZEN_PROFILE}`) || line.startsWith(join(AGENTS_APP, 'Contents/MacOS/'))));
 }
 
 const plist = async (app, key) =>
   (await execFileP('plutil', ['-extract', key, 'raw', join(app, 'Contents/Info.plist')]).catch(() => ({ stdout: '' }))).stdout.trim();
 
-// What the copy is made from: Zen's build and our icon. A change to either makes a new copy.
+// What the copy is made from: Zen's build, our icon and how we change it (COPY_VERSION). A change to any makes a new
+// copy.
+const COPY_VERSION = 2;
 async function sourceStamp() {
-  return `${await plist(ZEN_APP, 'CFBundleVersion')} ${readFileSync(ICON).length}`;
+  return `${await plist(ZEN_APP, 'CFBundleVersion')} ${readFileSync(ICON).length} ${COPY_VERSION} ${AGENT_ZEN_PROFILE}`;
 }
+
+const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 
 // Makes "Zen Agents.app" from Zen.app, unless the one there is from this Zen and icon. A copy-on-write clone, so it
 // takes no room; the changed Info.plist and icon break Zen's signature, so it is signed again, ad hoc, for this Mac.
@@ -66,6 +72,11 @@ async function agentsApp() {
       ['CFBundleDisplayName', 'Zen Agents'], ['ZenClaudeSource', stamp]]) {
       await execFileP('plutil', ['-replace', key, '-string', value, info]);
     }
+    // zen-agents:// links (the zen-window mod's, to a session's window) come straight here, not through the user's Zen.
+    await execFileP('plutil', ['-insert', 'CFBundleURLTypes.0', '-json',
+      JSON.stringify({ CFBundleURLName: 'Zen Agents window', CFBundleURLSchemes: ['zen-agents'] }), info]);
+    // Started by such a link rather than by the hub, it still opens agent Zen's profile, not Zen's default one.
+    await execFileP('plutil', ['-replace', 'LSEnvironment', '-json', JSON.stringify({ XRE_PROFILE_PATH: AGENT_ZEN_PROFILE }), info]);
     const iconset = join(work, 'icon.iconset');
     mkdirSync(iconset);
     for (const size of [16, 32, 128, 256, 512]) {
@@ -82,6 +93,8 @@ async function agentsApp() {
     await execFileP('codesign', ['--force', '--deep', '--sign', '-', app], { timeout: 120_000 });
     rmSync(AGENTS_APP, { recursive: true, force: true });
     renameSync(app, AGENTS_APP);
+    // So macOS knows it claims zen-agents:// (it ignores apps in temporary folders, as the tests' are).
+    await execFileP(LSREGISTER, ['-f', AGENTS_APP]).catch(() => {});
     return AGENTS_APP;
   } finally {
     rmSync(work, { recursive: true, force: true });

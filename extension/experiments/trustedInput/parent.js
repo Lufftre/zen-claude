@@ -375,6 +375,13 @@ this.trustedInput = class extends ExtensionAPI {
           });
         },
 
+        // Brings this app to the front (macOS), as a window being focused doesn't when the app is in the background:
+        // agent Zen, when a link asks for one of its windows.
+        async activateApp() {
+          if (Services.appinfo.OS !== "Darwin") return;
+          Cc["@mozilla.org/widget/macdocksupport;1"].getService(Ci.nsIMacDockSupport).activateApplication(true);
+        },
+
         async status() {
           try {
             eventUtils(Services.wm.getMostRecentWindow("navigator:browser"));

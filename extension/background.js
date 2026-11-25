@@ -460,10 +460,33 @@ browser.webNavigation.onBeforeNavigate.addListener(async (d) => {
   }
 }, { url: [{ hostEquals: 'zen-claude.localhost' }] });
 
+// Links from the zen-window mod to a window in agent Zen: zen-agents://session/<id>. Zen Agents.app claims the scheme,
+// so macOS hands them to agent Zen without the user's Zen coming forward. Zen can't load the address, so it arrives as
+// a tab titled with the rest of it; it goes at once and the session's window comes to the front.
+const AGENTS_LINK = /^(?:zen-agents:\/\/)?session\/([\w-]+)\/?$/;
+
+let lastAgentsLink = null; // what the last such link found, for extension_info
+
+async function agentsLink(tabId, text) {
+  const m = agentsZen && text && AGENTS_LINK.exec(text);
+  if (!m) return;
+  await browser.tabs.remove(tabId).catch(() => {});
+  const sess = sessions.get(m[1]);
+  const focused = sess?.windowId != null && (await focusSessionWindow(sess.windowId));
+  lastAgentsLink = { session: m[1], windowId: sess?.windowId ?? null, focused, time: Date.now() };
+}
+browser.webNavigation.onBeforeNavigate.addListener((d) => { if (d.frameId === 0) agentsLink(d.tabId, d.url); });
+browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (tab.url?.startsWith('zen-agents:')) agentsLink(tabId, tab.url);
+  else if (change.title && tab.url === 'about:blank') agentsLink(tabId, change.title);
+});
+
 async function focusSessionWindow(windowId) {
   if (![...sessions.values()].some((s) => s.own && s.windowId === windowId)) return false;
   const { state: shown } = await browser.windows.get(windowId).catch(() => ({}));
   if (shown === undefined) return false;
+  // Agent Zen is in the background when a link asks for one of its windows; focusing the window alone leaves it there.
+  if (agentsZen) await browser.trustedInput.activateApp().catch(() => {});
   await browser.windows.update(windowId, { focused: true, ...(shown === 'minimized' ? { state: 'normal' } : {}) });
   return true;
 }
@@ -706,7 +729,7 @@ const internalHandlers = {
   },
 
   async extension_info() {
-    return { version: VERSION, build: await BUILD, canUpdate: !!browser.trustedInput?.installXpi, role: await ROLE, dockBadge };
+    return { version: VERSION, build: await BUILD, canUpdate: !!browser.trustedInput?.installXpi, role: await ROLE, dockBadge, lastAgentsLink };
   },
   self_update: selfUpdate,
 };
@@ -728,7 +751,9 @@ const handlers = {
     const win = await browser.windows.get(await sessionWindow(sess), { populate: true });
     if (name !== undefined) nameWindow(sess);
     const note = openWindowError ? `\nNote: could not open an unsynced window (${openWindowError}); it may mirror other windows' tabs.` : '';
-    return { text: `This session's window is ${win.id}. Tabs:\n${win.tabs.map(describeTab).join('\n')}${note}` };
+    // The zen-window mod reads where the window is: one in agent Zen it links to by session (zen-agents://).
+    const where = agentsZen ? ` in agent Zen (session ${sess.id})` : '';
+    return { text: `This session's window is ${win.id}${where}. Tabs:\n${win.tabs.map(describeTab).join('\n')}${note}` };
   },
 
   async tabs_context({ all_windows }, sess) {
@@ -741,7 +766,8 @@ const handlers = {
       const header = `Window ${w.id} (${w.state}, ${w.width}x${w.height}${flags}):`;
       return `${header}\n${w.tabs.map(describeTab).join('\n')}`;
     });
-    return { text: `(* = active tab)\n${blocks.join('\n\n')}` };
+    const where = agentsZen ? `In agent Zen (session ${sess.id}).\n` : '';
+    return { text: `${where}(* = active tab)\n${blocks.join('\n\n')}` };
   },
 
   async tabs_create({ url }, sess) {
